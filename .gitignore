@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Cookies (sensitive)
+cookies.json
+
+# Test output
+test_output/
+
+# Debug data folders
+简单cookie-复杂cookie/
+所有notepad操作/
+login/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+todo
+test_notify_poll.py
+test_notepad.py
