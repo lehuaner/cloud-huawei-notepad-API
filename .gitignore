@@ -26,6 +26,7 @@ login/
 信任设备登录/
 登录到被迫登出/
 登录到被迫登出 - 副本/
+一些操作/
 
 # IDE
 .vscode/
@@ -40,3 +41,5 @@ todo
 
 # Project data
 note_structure_analysis.json
+hertbeatcheck
+queryCookieValuesByNames

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+import threading
+from typing import Any, Callable, Dict, Optional
 
 import requests
 
 from .auth import AuthManager, LoginResult
-from .base import BaseModule
+from .base import BaseModule, _generate_traceid
 
 logger = logging.getLogger("cloud-space-huawei")
 
@@ -66,6 +67,12 @@ class HuaweiCloudClient:
         self._user_id: str = ''
         self._device_id: str = ''
 
+        # 心跳保活线程
+        self._heartbeat_thread: Optional[threading.Thread] = None
+        self._heartbeat_stop = threading.Event()
+        self._heartbeat_interval: int = 300  # 默认 5 分钟
+        self._heartbeat_on_refresh: Optional[Callable[[str], None]] = None
+
     # ==================== 登录 API ====================
 
     def login(
@@ -112,15 +119,161 @@ class HuaweiCloudClient:
         - 已信任的 cookies 可使用所有模块 (联系人、备忘录、图库、云盘、查找设备)
         - 未信任的 cookies 仅可使用查找设备，其他模块不可用
 
+        会通过 heartbeatCheck(checkType=1) 验证会话是否有效，
+        如果 cookies 已过期则抛出 RuntimeError。
+
         Args:
             cookies: cookies 字典
 
         Returns:
             HuaweiCloudClient 实例
+
+        Raises:
+            RuntimeError: cookies 已过期 (心跳检测失败)
         """
         client = cls()
         client._apply_cookies(cookies)
+
+        # 验证 cookies 是否仍然有效
+        if not client._check_login_state():
+            raise RuntimeError(
+                "Cookies 已过期 (心跳检测失败)，请重新登录。"
+                "使用 client.login(phone, password, cookies=cookies) 重新登录。"
+            )
+
         return client
+
+    # ==================== 心跳保活 ====================
+
+    def start_heartbeat(
+        self,
+        interval: int = 300,
+        on_csrf_refresh: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        """启动后台心跳保活线程
+
+        heartbeatCheck(checkType=1) 请求会返回新的 CSRFToken，
+        后台线程会自动更新客户端的 CSRFToken，保持会话活跃。
+
+        Args:
+            interval: 心跳间隔秒数，默认 300 (5 分钟)
+            on_csrf_refresh: 可选回调，CSRFToken 刷新时调用，参数为新 token
+
+        Example::
+
+            client = HuaweiCloudClient.from_cookies(cookies)
+            client.start_heartbeat(interval=300)
+
+            # 随时获取最新的 CSRFToken
+            token = client.csrf_token
+
+            # 停止心跳
+            client.stop_heartbeat()
+        """
+        if self._heartbeat_thread is not None and self._heartbeat_thread.is_alive():
+            logger.warning("心跳线程已在运行")
+            return
+
+        self._heartbeat_interval = interval
+        self._heartbeat_on_refresh = on_csrf_refresh
+        self._heartbeat_stop.clear()
+
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop,
+            name="cloud-space-heartbeat",
+            daemon=True,
+        )
+        self._heartbeat_thread.start()
+        logger.info("心跳保活线程已启动 (间隔 %ds)", interval)
+
+    def stop_heartbeat(self) -> None:
+        """停止后台心跳保活线程"""
+        if self._heartbeat_thread is None or not self._heartbeat_thread.is_alive():
+            return
+
+        self._heartbeat_stop.set()
+        self._heartbeat_thread.join(timeout=10)
+        self._heartbeat_thread = None
+        logger.info("心跳保活线程已停止")
+
+    @property
+    def heartbeat_running(self) -> bool:
+        """心跳线程是否正在运行"""
+        return self._heartbeat_thread is not None and self._heartbeat_thread.is_alive()
+
+    @property
+    def csrf_token(self) -> str:
+        """获取当前最新的 CSRFToken（心跳线程会自动刷新）"""
+        return self._csrf_token
+
+    def _heartbeat_loop(self) -> None:
+        """后台心跳循环"""
+        while not self._heartbeat_stop.wait(timeout=self._heartbeat_interval):
+            try:
+                self._do_heartbeat()
+            except Exception as e:
+                logger.warning("心跳请求异常: %s", e)
+
+    def _do_heartbeat(self) -> None:
+        """执行一次心跳请求并更新 CSRFToken"""
+        trace_id = _generate_traceid("07100")
+        url = f"https://cloud.huawei.com/heartbeatCheck?checkType=1&traceId={trace_id}"
+
+        resp = self._session.get(
+            url,
+            headers=self._module_headers(),
+            timeout=30,
+            verify=False,
+        )
+
+        if resp.status_code != 200:
+            logger.warning("心跳请求返回状态码: %s", resp.status_code)
+            return
+
+        # 从响应头获取新的 CSRFToken
+        new_csrf = resp.headers.get('CSRFToken', '')
+        if new_csrf:
+            old_csrf = self._csrf_token
+            self._csrf_token = new_csrf
+            # 更新 session cookie
+            self._session.cookies.set('CSRFToken', new_csrf, domain='cloud.huawei.com')
+            # 更新 cookies_dict
+            self._cookies_dict['CSRFToken'] = new_csrf
+            # 更新所有已创建的子模块
+            self._update_modules_csrf(new_csrf)
+
+            if old_csrf != new_csrf:
+                logger.debug("CSRFToken 已刷新: %s... -> %s...",
+                             old_csrf[:12], new_csrf[:12])
+                if self._heartbeat_on_refresh:
+                    try:
+                        self._heartbeat_on_refresh(new_csrf)
+                    except Exception as e:
+                        logger.warning("on_csrf_refresh 回调异常: %s", e)
+
+        # 从 Set-Cookie 中也同步 CSRFToken
+        for cookie in self._session.cookies:
+            if cookie.name == 'CSRFToken' and cookie.value and cookie.value != self._csrf_token:
+                self._csrf_token = cookie.value
+                self._cookies_dict['CSRFToken'] = cookie.value
+                self._update_modules_csrf(cookie.value)
+
+        try:
+            data = resp.json()
+            code = str(data.get("code", "-1"))
+            if code != "0":
+                logger.warning("心跳返回 code=%s, info=%s", code, data.get("info", ""))
+        except Exception:
+            pass
+
+        logger.debug("心跳正常")
+
+    def _update_modules_csrf(self, new_csrf: str) -> None:
+        """更新所有已创建子模块的 CSRFToken"""
+        for mod in (self._notepad, self._contacts, self._gallery,
+                    self._drive, self._find_device):
+            if mod is not None and hasattr(mod, '_csrf_token'):
+                mod._csrf_token = new_csrf
 
     # ==================== 登出 API ====================
 
@@ -137,6 +290,9 @@ class HuaweiCloudClient:
             bool — 登出是否成功
         """
         from .base import _generate_traceid
+
+        # 先停止心跳线程
+        self.stop_heartbeat()
 
         try:
             # Step 1: portalLogout — 清除 cloud.huawei.com 域认证 cookies
@@ -286,6 +442,56 @@ class HuaweiCloudClient:
         self._gallery = None
         self._drive = None
         self._find_device = None
+
+    def _check_login_state(self) -> bool:
+        """通过 heartbeatCheck(checkType=1) 检查会话是否有效
+
+        心跳请求成功 (code=0) 表示 cookies 有效，
+        同时会从响应头更新 CSRFToken。
+
+        Returns:
+            True 表示会话有效，False 表示已过期
+        """
+        try:
+            trace_id = _generate_traceid("07100")
+            url = f"https://cloud.huawei.com/heartbeatCheck?checkType=1&traceId={trace_id}"
+            resp = self._session.get(
+                url,
+                headers=self._module_headers(),
+                timeout=30,
+                verify=False,
+            )
+            if resp.status_code != 200:
+                logger.warning("心跳检测返回状态码: %s", resp.status_code)
+                return False
+
+            # 从响应头获取新的 CSRFToken
+            new_csrf = resp.headers.get('CSRFToken', '')
+            if new_csrf:
+                self._csrf_token = new_csrf
+                self._session.cookies.set('CSRFToken', new_csrf, domain='cloud.huawei.com')
+                self._cookies_dict['CSRFToken'] = new_csrf
+                self._update_modules_csrf(new_csrf)
+
+            # 从 Set-Cookie 中也同步 CSRFToken
+            for cookie in self._session.cookies:
+                if cookie.name == 'CSRFToken' and cookie.value and cookie.value != self._csrf_token:
+                    self._csrf_token = cookie.value
+                    self._cookies_dict['CSRFToken'] = cookie.value
+                    self._update_modules_csrf(cookie.value)
+
+            data = resp.json()
+            code = str(data.get("code", "-1"))
+            if code == "0":
+                logger.info("心跳检测: 会话有效")
+                return True
+            else:
+                logger.warning("心跳检测: code=%s, info=%s", code, data.get("info", ""))
+                return False
+
+        except Exception as e:
+            logger.warning("心跳检测失败: %s", e)
+            return False
 
     def _ensure_device_id(self) -> None:
         """如果 device_id 为空，尝试从 getHomeData 获取"""
