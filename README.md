@@ -1,72 +1,195 @@
-# 华为云笔记 API 模块
+# cloud-space-huawei
 
-提供华为云备忘录的基础 HTTP 请求封装。
+华为云空间 (Huawei Cloud Space) Python SDK，提供登录、备忘录、联系人、图库、云盘、查找设备等接口。
+
+[English](./README_EN.md)
+
+## 安装
+
+```bash
+git clone https://github.com/your-repo/cloud-space-huawei.git
+cd cloud-space-huawei
+pip install -e .
+```
+
+依赖：Python >= 3.8，`requests >= 2.28`
 
 ## 快速开始
 
-```python
-from hwcloud_api import api_post, api_get
+### 1. 账号密码登录
 
-# 必须传入 cookies 字典
-cookies = {"CSRFToken": "...", "userId": "..."}
-data = api_post("https://cloud.huawei.com/html/getHomeData", {}, cookies=cookies, verbose=False)
+```python
+from cloud_space_huawei import HuaweiCloudClient
+
+client = HuaweiCloudClient()
+
+# 首次登录
+result = client.login("手机号", "密码")
+
+if result.need_verify:
+    # 新设备需要验证码
+    code = input("请输入验证码: ")
+    result = client.verify_device(code)
+
+if result:
+    # 保存 cookies，下次直接用 cookies 登录即可跳过设备验证
+    cookies = result.cookies
+    print(f"登录成功! userId={cookies.get('userId')}")
 ```
 
-## 核心函数
+### 2. 从 cookies 恢复会话
 
-| 函数 | 说明 |
+```python
+from cloud_space_huawei import HuaweiCloudClient
+
+# 从之前保存的 cookies 创建
+client = HuaweiCloudClient.from_cookies(cookies)
+```
+
+### 3. 使用已有 cookies 跳过设备验证
+
+```python
+from cloud_space_huawei import HuaweiCloudClient
+
+client = HuaweiCloudClient()
+
+# 传入之前已认证过的cookies，可跳过新设备验证
+result = client.login("手机号", "密码", cookies=cookies)
+```
+
+### 4. 使用备忘录
+
+```python
+# 获取笔记列表
+result = client.notepad.get_notes_list()
+if result["ok"]:
+    for note in result["data"]["noteList"]:
+        print(f"笔记: {note.get('title', '')} (GUID: {note['guid']})")
+
+# 获取笔记详情
+result = client.notepad.get_note_detail(guid="note-guid-here")
+
+# 创建新笔记
+result = client.notepad.create_note(title="测试标题", content_text="测试内容")
+if result["ok"]:
+    client.notepad.sync()  # 同步到云端
+
+# 更新笔记 (需要 guid 和 etag)
+result = client.notepad.update_note(
+    guid="note-guid", etag="1", title="新标题", content_text="新内容"
+)
+if result["ok"]:
+    client.notepad.sync()
+```
+
+### 5. 使用其他模块
+
+```python
+# 联系人 (尚未实现)
+# client.contacts.get_contacts()
+
+# 图库 (尚未实现)
+# client.gallery.get_albums()
+
+# 云盘 (尚未实现)
+# client.drive.list_files()
+
+# 查找设备 (尚未实现)
+# client.find_device.get_device_list()
+```
+
+### 6. 自由发挥 — 直接操作 session
+
+```python
+# 底层 requests.Session 完全开放
+resp = client.session.get("https://cloud.huawei.com/some-api")
+print(resp.json())
+
+# 手动管理 cookies
+cookies = {c.name: c.value for c in client.session.cookies}
+```
+
+## API 参考
+
+### 核心客户端 `HuaweiCloudClient`
+
+| 方法 | 说明 |
 |------|------|
-| `api_get(url, cookies, params=None, ...)` | GET 请求，cookies 必须传入 |
-| `api_post(url, body, cookies, ...)` | POST 请求，自动注入 traceId |
-| `load_cookies(path=None)` | 加载 cookies 文件，返回 `dict` |
-| `get_common_headers(cookies)` | 构建请求头，cookies 必须传入 |
-| `extract_note_content(data)` | 从响应提取笔记正文 |
+| `login(phone, password, cookies=None)` | 账号密码登录，返回 `LoginResult` |
+| `verify_device(verify_code)` | 提交设备验证码 |
+| `from_cookies(cookies)` | 类方法，从 cookies dict 恢复会话 |
 
-## 最佳实践
+#### 属性
 
-**1. cookies 必须由调用方从浏览器导出后传入**
+| 属性 | 类型 | 说明 |
+|------|------|------|
+| `cookies` | `dict` | 当前 cookies 字典 |
+| `notepad` | `NotepadModule` | 备忘录模块 |
+| `contacts` | `ContactsModule` | 联系人模块 (骨架) |
+| `gallery` | `GalleryModule` | 图库模块 (骨架) |
+| `drive` | `DriveModule` | 云盘模块 (骨架) |
+| `find_device` | `FindDeviceModule` | 查找设备模块 (骨架) |
+
+### `LoginResult`
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `success` | `bool` | 是否成功 |
+| `need_verify` | `bool` | 是否需要二次验证 |
+| `cookies` | `dict` | 登录后的 cookies（含信任设备信息，保存后下次可跳过验证） |
+| `auth_devices` | `list` | 验证设备列表 |
+| `error` | `str` | 错误信息 |
+
+### 备忘录 `NotepadModule`
+
+| 方法 | 说明 |
+|------|------|
+| `get_tags()` | 获取标签列表 |
+| `get_notes_list(index, status, guids)` | 获取笔记列表 |
+| `get_note_detail(guid, kind, start_cursor)` | 获取笔记详情 |
+| `create_note(title, content_text, tag_id)` | 创建新笔记 |
+| `update_note(guid, etag, title, content_text, ...)` | 更新笔记 |
+| `sync(ctag_note_info, ctag_task_info, start_cursor)` | 同步操作 |
+| `get_task_detail(guid, ctag_task_info, start_cursor)` | 查询待办任务详情 |
+| `get_graffiti_data(asset_id, record_id, version_id, kind)` | 获取涂鸦数据 |
+| `pre_process_file(need_to_sign_url, http_method, generate_sign_flag)` | 文件预签名 |
+| `get_common_param()` | 获取通用参数 |
+| `get_home_data()` | 获取首页数据 |
+| `get_cookies()` | 查询 Cookie 值 |
+| `heartbeat_check()` | 心跳检测 |
+| `notify_poll(tag, module, timeout)` | 通知轮询 |
+| `get_space_info()` | 获取云空间容量信息 |
+| `refresh_cookies()` | 刷新 cookies |
+
+### 统一返回格式
+
+所有子模块方法返回统一格式：
+
 ```python
-# 从浏览器开发者工具 Network 面板复制 cookies.json 内容
-cookies = {"CSRFToken": "xxx", "userId": "123", ...}
-data = api_post(url, body, cookies=cookies, verbose=False)
+{
+    "ok": bool,       # 操作是否成功
+    "code": str,      # 状态码，"0" 表示成功
+    "msg": str,       # 人类可读的消息
+    "data": ...       # 具体数据
+}
 ```
 
-**2. 使用 `load_cookies()` 加载文件得到 dict，再传入 API**
-```python
-from hwcloud_api import load_cookies, api_post
+## 设计理念
 
-cookies = load_cookies("path/to/cookies.json")
-data = api_post(url, body, cookies=cookies, verbose=False)
-```
+1. **简单易用**: `HuaweiCloudClient` 是唯一入口，登录后即可使用所有模块
+2. **用户掌控**: `cookies` 完全交给用户保存，SDK 不做任何存储假设
+3. **自由发挥**: 底层 `requests.Session` 完全暴露，用户可以自由定制请求
+4. **模块化**: 各功能模块独立，按需加载，未实现的模块不会影响已实现的功能
 
-**3. 生产环境关闭 verbose**
-```python
-data = api_post(url, body, cookies=cookies, verbose=False)
-```
+## 日志
 
-**4. 响应状态码 200 不代表业务成功，需检查 `code` 字段**
-```python
-data = api_post(url, body, cookies=cookies, verbose=False)
-if data and data.get("code") == "0":
-    # 业务成功
-    pass
-```
-
-**5. 401 表示 cookies 过期，需重新从浏览器导出**
-
-**6. 使用 `output_file` 保存调试响应**
-```python
-data = api_post(url, body, cookies=cookies, output_file="response.json")
-```
-
-## Cookies 格式
-
-传入格式为 `dict`：
+SDK 使用 Python 标准库 `logging`，logger 名称为 `cloud-space-huawei`：
 
 ```python
-{"CSRFToken": "xxx", "userId": "123", ...}
+import logging
+logging.getLogger("cloud-space-huawei").setLevel(logging.DEBUG)
 ```
 
-`load_cookies()` 兼容两种文件格式（自动转换）：
-- 扁平：`{"CSRFToken": "xxx"}`
-- 嵌套：`{"CSRFToken": {"value": "xxx", "domain": "..."}}`
+## License
+
+[MIT](./LICENSE)

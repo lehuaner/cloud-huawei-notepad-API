@@ -10,16 +10,22 @@ build/
 *.egg-info/
 *.egg
 
-# Cookies (sensitive)
+# Sensitive data
 cookies.json
+trust_data.json
+session.json
+captcha.png
 
-# Test output
+# Test / debug
 test_output/
-
-# Debug data folders
+test*.*
 简单cookie-复杂cookie/
 所有notepad操作/
 login/
+登出过程/
+信任设备登录/
+登录到被迫登出/
+登录到被迫登出 - 副本/
 
 # IDE
 .vscode/
@@ -31,5 +37,6 @@ login/
 .DS_Store
 Thumbs.db
 todo
-test_notify_poll.py
-test_notepad.py
+
+# Project data
+note_structure_analysis.json

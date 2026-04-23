@@ -3,20 +3,20 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
-name = "hwcloud-notepad"
-version = "0.1.0"
-description = "华为云备忘录 API 客户端"
+name = "cloud-space-huawei"
+version = "0.2.0"
+description = "华为云空间 Python SDK — 登录、备忘录、联系人、图库、云盘、查找设备"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.8"
 authors = [
-    { name = "HWCloud Notepad Contributors" },
+    { name = "cloud-space-huawei Contributors" },
 ]
-keywords = ["huawei", "cloud", "notepad", "api"]
+keywords = ["huawei", "cloud", "notepad", "contacts", "gallery", "drive", "api"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
@@ -35,4 +35,4 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["notepad_client*"]
+include = ["cloud_space_huawei*"]
