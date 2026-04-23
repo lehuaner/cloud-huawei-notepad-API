@@ -118,6 +118,13 @@ cookies = {c.name: c.value for c in client.session.cookies}
 | `login(phone, password, cookies=None)` | 账号密码登录，返回 `LoginResult` |
 | `verify_device(verify_code)` | 提交设备验证码 |
 | `from_cookies(cookies)` | 类方法，从 cookies dict 恢复会话 |
+| `get_common_param()` | 获取通用参数 |
+| `get_home_data(simplify=True)` | 获取首页数据 (含 deviceIdForHeader)，simplify=True 时精简返回 |
+| `get_cookies()` | 查询服务端 Cookie 值 |
+| `heartbeat_check()` | 心跳检测，保持会话活跃 |
+| `notify_poll(tag, module, timeout)` | 通知轮询 (长轮询) |
+| `get_space_info(simplify=True)` | 获取云空间容量信息，simplify=True 时精简返回 |
+| `refresh_cookies()` | 刷新 cookies 并更新客户端状态 |
 
 #### 属性
 
@@ -144,7 +151,7 @@ cookies = {c.name: c.value for c in client.session.cookies}
 
 | 方法 | 说明 |
 |------|------|
-| `get_tags()` | 获取标签列表 |
+| `get_tags(simplify=True)` | 获取标签列表，simplify=True 时精简返回 |
 | `get_notes_list(index, status, guids)` | 获取笔记列表 |
 | `get_note_detail(guid, kind, start_cursor)` | 获取笔记详情 |
 | `create_note(title, content_text, tag_id)` | 创建新笔记 |
@@ -154,11 +161,11 @@ cookies = {c.name: c.value for c in client.session.cookies}
 | `get_graffiti_data(asset_id, record_id, version_id, kind)` | 获取涂鸦数据 |
 | `pre_process_file(need_to_sign_url, http_method, generate_sign_flag)` | 文件预签名 |
 | `get_common_param()` | 获取通用参数 |
-| `get_home_data()` | 获取首页数据 |
+| `get_home_data(simplify=True)` | 获取首页数据，simplify=True 时精简返回 |
 | `get_cookies()` | 查询 Cookie 值 |
 | `heartbeat_check()` | 心跳检测 |
 | `notify_poll(tag, module, timeout)` | 通知轮询 |
-| `get_space_info()` | 获取云空间容量信息 |
+| `get_space_info(simplify=True)` | 获取云空间容量信息，simplify=True 时精简返回 |
 | `refresh_cookies()` | 刷新 cookies |
 
 ### 统一返回格式

@@ -1,10 +1,23 @@
 """华为云空间登录模块
 
 两种登录场景:
-1. 信任设备: login(cookies=...) → need_verify=False, 直接获得 cookies
-2. 新设备:   login() → need_verify=True, 需调用 verify_device(code)
+1. 信任设备: login(cookies=...) → need_verify=False, 直接获得完整 cookies
+2. 新设备:   login() → need_verify=True, cookies 中已包含 CSRFToken
+
+新设备登录时，login() 会先完成 OAuth 流程获取 CSRFToken，然后返回 need_verify=True。
+此时用户已有有效的 session（可以调用需要 CSRFToken 的 API），但设备尚未受信任。
+注意：login() 不会自动获取验证设备列表，避免触发服务端发送验证码。
+用户可通过 send_verify_code() 获取设备列表（此时服务端会自动向默认设备发送验证码），
+再通过 verify_device() 提交验证码完成信任认证。
 
 登录完成后，用户应保存 cookies，下次直接使用 cookies 登录即可跳过设备验证。
+
+完整 cookies 获取流程:
+- homeTransit (302) → Set-Cookie: needActive, userId
+- GET /home (200) → Set-Cookie: isLogin=1, CSRFToken (首次颁发)
+- POST /html/getHomeData → 轮换 CSRFToken, 设置 loginSecLevel/functionSupport/webOfficeEditToken/shareToken
+- POST /html/queryCookieValuesByNames → 获取服务端已知 cookie 值
+- GET /heartbeatCheck → 再次轮换 CSRFToken (保持新鲜)
 """
 
 from __future__ import annotations
@@ -78,9 +91,12 @@ class LoginResult:
         if not result:
             print(result.error)
         elif result.need_verify:
+            # 已获取 CSRFToken，session 可用，但设备未信任
+            # 获取设备列表（同时触发发送验证码）
+            send_result = auth.send_verify_code(device_index=0)
             code = input("验证码: ")
-            result = auth.verify_device(code)
-        # 保存 cookies 即可，cookies 中已包含信任设备信息
+            auth.verify_device(code)
+        # 保存 cookies 即可，cookies 中已包含 CSRFToken
         save_json("cookies.json", result.cookies)
     """
     success: bool
@@ -245,14 +261,55 @@ class AuthManager:
         # Step 5: 密码登录
         return self._step_password_login()
 
+    def send_verify_code(self, device_index: int = 0) -> LoginResult:
+        """获取验证设备列表（同时触发服务端发送验证码）
+
+        在 login() 返回 need_verify=True 后调用。
+        此方法会获取验证设备列表，服务端在返回设备列表时已自动向默认设备
+        发送验证码（getPageInfo 返回的 authCodeSentList 即为已发送验证码的设备列表）。
+
+        Args:
+            device_index: 选择要验证的设备序号，默认 0（第一个设备），
+                          仅用于标记哪个设备已发送验证码，不影响验证码发送。
+
+        Returns:
+            LoginResult — 成功时 need_verify=True，auth_devices 包含设备列表
+        """
+        # 首次调用时获取设备列表（getPageInfo 会触发服务端发送验证码）
+        if not self._auth_devices:
+            devices_result = self._step_get_auth_devices()
+            if not devices_result:
+                return devices_result
+
+        if not self._auth_devices:
+            return LoginResult(False, error='没有可用的验证设备')
+
+        if device_index < 0 or device_index >= len(self._auth_devices):
+            return LoginResult(False, error=f'设备序号 {device_index} 超出范围（共 {len(self._auth_devices)} 个设备）')
+
+        # 标记指定设备为已发送验证码
+        device = self._auth_devices[device_index]
+        device['sent'] = 1
+
+        return LoginResult(
+            success=True,
+            need_verify=True,
+            cookies=self._get_cookies_dict(),
+            auth_devices=self._auth_devices,
+        )
+
     def verify_device(self, verify_code: str) -> LoginResult:
-        """提交设备验证码，完成登录
+        """提交设备验证码，完成设备信任认证
+
+        在 send_verify_code() 后调用，提交用户收到的验证码。
+        验证成功后会信任当前浏览器，并用新的 callbackURL 重新走 OAuth 流程，
+        获取认证后的完整 cookies（含更新后的 loginSecLevel）。
 
         Args:
             verify_code: 设备上收到的验证码
 
         Returns:
-            LoginResult — 成功后 cookies 已填充（含信任设备信息）
+            LoginResult — 成功后 cookies 已更新（含信任设备信息和认证后的 loginSecLevel）
         """
         device = None
         for d in self._auth_devices:
@@ -262,7 +319,7 @@ class AuthManager:
         if device is None and self._auth_devices:
             device = self._auth_devices[0]
         if device is None:
-            return LoginResult(False, error='没有可用的验证设备')
+            return LoginResult(False, error='没有可用的验证设备，请先调用 send_verify_code()')
 
         verify_account_name = str(device.get('name', ''))
         verify_account_type = device.get('accountType', -1)
@@ -275,7 +332,7 @@ class AuthManager:
                 'lang': _LANG, 'languageCode': _LANG,
                 'twoStepVerifyCode': verify_code,
                 'verifyAccountType': str(verify_account_type),
-                'verifyUserAccount': urllib.parse.quote(verify_account_name, safe=''),
+                'verifyUserAccount': verify_account_name,
             },
         )
         auth_result = resp.json()
@@ -293,7 +350,22 @@ class AuthManager:
             },
         )
 
-        return self._finish_oauth(auth_result.get('callbackURL', ''))
+        # 用验证后返回的 callbackURL 重新走 OAuth 流程，获取认证后的完整 cookies
+        # 必须清除第一次 OAuth 流程（_step_password_login 中）设置的干扰 cookies，
+        # 否则旧的 loginID/token/JSESSIONID 会导致第二次 OAuth login 失败
+        self._clear_oauth_session_cookies()
+
+        callback_url = auth_result.get('callbackURL', '')
+        if callback_url:
+            return self._finish_oauth(callback_url)
+
+        # 如果没有 callbackURL，回退到直接返回当前 cookies
+        cookies = self._get_cookies_dict()
+        return LoginResult(
+            success=True,
+            need_verify=False,
+            cookies=cookies,
+        )
 
     def restore_session(self, cookies: Dict[str, str]) -> bool:
         """从 cookies 恢复 session，返回是否仍有效"""
@@ -458,15 +530,32 @@ class AuthManager:
             return LoginResult(False, error='密码登录失败', detail=login_result)
 
         need_verify = bool(login_result.get('needPopTrust', False))
+        callback_url = login_result.get('callbackURL', '')
+
+        # 无论是否需要设备验证，都先完成 OAuth 流程获取 CSRFToken
+        # 这样 session 在 need_verify=True 时也可用
+        oauth_result = self._finish_oauth(callback_url)
+        if not oauth_result:
+            return oauth_result
 
         if not need_verify:
-            return self._finish_oauth(login_result.get('callbackURL', ''))
+            return oauth_result
 
-        # 需要二次验证 → 获取设备列表
-        return self._step_get_auth_devices()
+        # 需要设备验证 → 不自动获取设备列表（ getPageInfo 会触发服务端发送验证码）
+        # 只返回 need_verify=True 和已有 cookies（含 CSRFToken）
+        # 等用户显式调用 send_verify_code() 时再获取设备列表
+        return LoginResult(
+            success=True,
+            need_verify=True,
+            cookies=oauth_result.cookies,
+        )
 
     def _step_get_auth_devices(self) -> LoginResult:
-        """获取验证设备列表"""
+        """获取验证设备列表
+
+        此方法由 send_verify_code() 自动调用。
+        注意：调用 getPageInfo 会触发服务端向默认设备发送验证码。
+        """
         auth_url = (
             f"https://id1.cloud.huawei.com/CAS/portal/authIdentify.html"
             f"?loginUrl={urllib.parse.quote(_SERVICE, safe='')}"
@@ -476,6 +565,11 @@ class AuthManager:
             f"&loginChannel={_LOGIN_CHANNEL}&scenesType=0"
         )
         self.session.get(auth_url)
+
+        self._post_form(
+            'https://id1.cloud.huawei.com/CAS/IDM_W/ajaxHandler/common/getBaseSwitchInfo',
+            {'themeName': 'huawei', 'lang': _LANG, 'supportHarmonyTheme': 'false'},
+        )
 
         url_param_auth = (
             f'loginUrl={urllib.parse.quote(_SERVICE, safe="")}'
@@ -504,6 +598,11 @@ class AuthManager:
         self._auth_page_token = auth_result.get('pageToken', '')
         self._auth_page_token_key = auth_result.get('pageTokenKey', '')
 
+        # 认证页面也需要 dev + analysisHealth 步骤（与浏览器行为一致）
+        # 服务端要求在提交 cloudAuthLogin 前完成这些步骤
+        self._step_auth_dev()
+        self._step_auth_health(auth_url)
+
         error_desc_str = auth_result.get('localInfo', {}).get('errorDesc', '{}')
         error_desc = json.loads(error_desc_str) if isinstance(error_desc_str, str) else error_desc_str
         auth_devices = error_desc.get('authCodeSentList', [])
@@ -514,6 +613,52 @@ class AuthManager:
             need_verify=True,
             cookies=self._get_cookies_dict(),
             auth_devices=auth_devices,
+        )
+
+    def _step_auth_dev(self) -> None:
+        """认证页面的设备指纹步骤（使用 auth pageToken）"""
+        fp_value = _generate_fp()
+        dev_data: Dict[str, Any] = {
+            'pageToken': self._auth_page_token, 'pageTokenKey': self._auth_page_token_key,
+            'reqClientType': _REQ_CLIENT_TYPE, 'loginChannel': _LOGIN_CHANNEL,
+            'lang': _LANG, 'languageCode': _LANG,
+            'fp': fp_value,
+        }
+        if self._saved_hwid:
+            dev_data['hwid_cas_sid'] = self._saved_hwid
+        resp = self._post_form(
+            'https://id1.cloud.huawei.com/CAS/IDM_W/ajaxHandler/dev', dev_data,
+        )
+        try:
+            dev_result = resp.json()
+            dev_sid = dev_result.get('sid', '')
+            if dev_sid:
+                self._saved_hwid = dev_sid
+        except Exception:
+            pass
+
+    def _step_auth_health(self, referer: str = '') -> None:
+        """认证页面的健康检测步骤（使用 auth pageToken）"""
+        self._post_form(
+            'https://id1.cloud.huawei.com/CAS/IDM_W/ajaxHandler/analysisHealth',
+            {
+                'pageToken': self._auth_page_token, 'pageTokenKey': self._auth_page_token_key,
+                'reqClientType': _REQ_CLIENT_TYPE, 'loginChannel': _LOGIN_CHANNEL,
+                'lang': _LANG, 'languageCode': _LANG,
+                'operType': '1000',
+                'message': json.dumps({
+                    "currentUri": "/CAS/portal/authIdentify.html",
+                    "isOpenCookie": "true", "isOpenPerformance": True,
+                    "isSupportES6": True, "dNSTake": "0", "tCPTake": "0",
+                    "reqRespTake": "92", "totalTake": "1523", "whiteScreenTake": "102",
+                    "resourceDataSize": 1124977, "domDisplayTake": "391",
+                    "reqReadyTake": "10",
+                    "currentLocaleTime": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "resources": [], "extInfo": {"isSwitchWiseContent2SLB": False}
+                }),
+                'illnessType': '0', 'isIframe': 'true', 'service': _SERVICE,
+            },
+            referer=referer,
         )
 
     def _finish_oauth(self, callback_url: str) -> LoginResult:
@@ -563,6 +708,11 @@ class AuthManager:
         resp = self.session.get(cas_redirect_url, allow_redirects=False)
         login_callback_url = resp.headers.get('Location', '') if resp.status_code == 302 else resp.url
 
+        # 必须访问 loginCallback 页面，服务端需要验证 ticket 并建立 OAuth 授权状态
+        # 跳过此步骤会导致 oauth2/ajax/login 报错 "missing required parameter: token"
+        if login_callback_url:
+            self.session.get(login_callback_url, allow_redirects=False)
+
         cb_params = urllib.parse.parse_qs(urllib.parse.urlparse(login_callback_url).query)
         ticket = cb_params.get('ticket', [''])[0]
         site_id = cb_params.get('siteID', ['1'])[0]
@@ -606,21 +756,26 @@ class AuthManager:
         code_url = login_data.get('code', '')
         resp = self.session.get(code_url, allow_redirects=False)
         if resp.status_code == 302:
-            # homeTransit 返回 302，会设置 needActive、userId 等 cookies
-            home_url = resp.headers.get('Location', '')
-            if home_url:
-                target = home_url if home_url.startswith('http') else f"https://cloud.huawei.com{home_url}"
-                # 访问 /home 页面，服务端会设置 isLogin=1、CSRFToken 等关键 cookies
-                home_resp = self.session.get(target)
-
-                # 如果 /home 响应头中有 Set-Cookie，确保 CSRFToken 被捕获
-                # 有些情况下 CSRFToken 在响应头中设置但 requests 可能没有正确保存
-                csrf_from_header = home_resp.headers.get('CSRFToken', '')
-                if csrf_from_header:
-                    self.session.cookies.set('CSRFToken', csrf_from_header, domain='cloud.huawei.com')
+            # homeTransit 返回 302，Set-Cookie 设置 needActive、userId
+            # 不再跟随重定向到 /home，因为 /home 中的 isLogin/CSRFToken 等
+            # cookies 是由前端 JS 通过 document.cookie 设置的，requests 无法执行 JS
+            # 我们改用服务端 API 来获取这些值
+            pass
         elif resp.status_code == 200:
             # 某些情况下 homeTransit 直接返回 200（不太常见但需要处理）
             pass
+
+        # Step A: 跟随 homeTransit 重定向到 /home — 获取初始 CSRFToken
+        self._fetch_initial_csrf()
+
+        # Step B: getHomeData — 轮换 CSRFToken，获取 loginSecLevel/functionSupport 等
+        self._fetch_home_data()
+
+        # Step C: queryCookieValuesByNames — 获取服务端已知 cookie 值
+        self._fetch_server_cookies()
+
+        # Step D: heartbeatCheck — 再次轮换 CSRFToken（可选，保持 token 新鲜）
+        self._fetch_csrf_via_heartbeat()
 
         cookies = self._get_cookies_dict()
         return LoginResult(
@@ -629,7 +784,223 @@ class AuthManager:
             cookies=cookies,
         )
 
+    def _fetch_initial_csrf(self) -> None:
+        """获取初始 CSRFToken
+
+        跟随 homeTransit 的 302 重定向到 /home，
+        服务端会通过 Set-Cookie 和响应头设置初始 CSRFToken。
+        """
+        try:
+            resp = self.session.get(
+                'https://cloud.huawei.com/home',
+                allow_redirects=True,
+                timeout=30,
+                verify=False,
+            )
+            if resp.status_code == 200:
+                # 从响应头获取 CSRFToken
+                csrf_from_header = resp.headers.get('CSRFToken', '')
+                if csrf_from_header:
+                    self.session.cookies.set('CSRFToken', csrf_from_header, domain='cloud.huawei.com')
+                    logger.debug("GET /home 成功，初始 CSRFToken: %s", csrf_from_header[:16])
+            else:
+                logger.warning("GET /home 返回状态码: %s", resp.status_code)
+        except Exception as e:
+            logger.warning("GET /home 失败: %s", e)
+
+    def _fetch_home_data(self) -> None:
+        """调用 getHomeData API 轮换 CSRFToken 并获取登录状态 cookies
+
+        getHomeData 会：
+        1. 验证当前 CSRFToken
+        2. 返回新的 CSRFToken（轮换）
+        3. 设置 loginSecLevel、isLogin、functionSupport、webOfficeEditToken、shareToken
+        """
+        csrf_token = ''
+        for cookie in self.session.cookies:
+            if cookie.name == 'CSRFToken' and cookie.value:
+                csrf_token = cookie.value
+                break
+        if not csrf_token:
+            logger.warning("getHomeData 缺少 CSRFToken，跳过")
+            return
+
+        try:
+            trace_id = f"00001_02_{int(time.time())}_{random.randint(10000000, 99999999)}"
+            headers = {
+                'Accept': 'application/json, text/plain, */*',
+                'Content-Type': 'application/json;charset=UTF-8',
+                'Origin': 'https://cloud.huawei.com',
+                'Referer': 'https://cloud.huawei.com/home',
+                'x-hw-device-category': 'Web',
+                'x-hw-os-brand': 'Web',
+                'x-hw-client-mode': 'frontend',
+                'x-hw-device-type': '7',
+                'x-hw-trace-id': trace_id,
+            }
+            resp = self.session.post(
+                f"https://cloud.huawei.com/html/getHomeData?traceId={trace_id}",
+                headers=headers,
+                json={'traceId': trace_id},
+                timeout=30,
+                verify=False,
+            )
+            if resp.status_code == 200:
+                # getHomeData 响应头会设置新的 CSRFToken 和其他 cookies
+                csrf_from_header = resp.headers.get('CSRFToken', '')
+                if csrf_from_header:
+                    self.session.cookies.set('CSRFToken', csrf_from_header, domain='cloud.huawei.com')
+                    logger.debug("getHomeData 成功，轮换后 CSRFToken: %s", csrf_from_header[:16])
+                else:
+                    logger.debug("getHomeData 成功")
+            else:
+                logger.warning("getHomeData 返回状态码: %s", resp.status_code)
+        except Exception as e:
+            logger.warning("getHomeData 失败: %s", e)
+
+    def _fetch_csrf_via_heartbeat(self) -> None:
+        """通过 heartbeatCheck 轮换 CSRFToken
+
+        在获取初始 CSRFToken 后，heartbeatCheck 用于轮换 token 保持新鲜。
+        注意：heartbeatCheck 需要 Cookie 中已存在 CSRFToken 并在请求头中携带。
+        """
+        csrf_token = ''
+        for cookie in self.session.cookies:
+            if cookie.name == 'CSRFToken' and cookie.value:
+                csrf_token = cookie.value
+                break
+        if not csrf_token:
+            logger.warning("heartbeatCheck 缺少 CSRFToken，跳过")
+            return
+
+        user_id = ''
+        for cookie in self.session.cookies:
+            if cookie.name == 'userId' and cookie.value:
+                user_id = cookie.value
+                break
+
+        try:
+            trace_id = f"07100_02_{int(time.time())}_{random.randint(10000000, 99999999)}"
+            url = f"https://cloud.huawei.com/heartbeatCheck?checkType=1&traceId={trace_id}"
+            headers = {
+                'Accept': 'application/json, text/plain, */*',
+                'CSRFToken': csrf_token,
+                'userId': user_id,
+                'x-hw-device-category': 'Web',
+                'x-hw-os-brand': 'Web',
+                'x-hw-client-mode': 'frontend',
+                'x-hw-device-type': '7',
+                'Referer': 'https://cloud.huawei.com/home',
+            }
+            resp = self.session.get(url, headers=headers, timeout=30, verify=False)
+            if resp.status_code == 200:
+                # 从响应头获取新的 CSRFToken
+                csrf_from_header = resp.headers.get('CSRFToken', '')
+                if csrf_from_header:
+                    self.session.cookies.set('CSRFToken', csrf_from_header, domain='cloud.huawei.com')
+                    logger.debug("heartbeatCheck 成功，新 CSRFToken: %s", csrf_from_header[:16])
+            else:
+                logger.warning("heartbeatCheck 返回状态码: %s", resp.status_code)
+        except Exception as e:
+            logger.warning("heartbeatCheck 失败: %s", e)
+
+    def _fetch_server_cookies(self) -> None:
+        """从服务端 API 获取浏览器端 JS 设置的 cookie 值
+
+        浏览器中 /home 页面的 JS 会设置 isLogin、loginSecLevel、functionSupport、
+        webOfficeEditToken、shareToken 等 cookies。这些值来自服务端数据，
+        但 requests 无法执行 JS。
+
+        通过 queryCookieValuesByNames API 获取服务端已知的 cookie 值，
+        然后手动设置到 session 中。
+        """
+        try:
+            # queryCookieValuesByNames 不需要 CSRFToken 头（只需要 userId）
+            # 但如果已有 CSRFToken 会更好
+            csrf_token = ''
+            for cookie in self.session.cookies:
+                if cookie.name == 'CSRFToken' and cookie.value:
+                    csrf_token = cookie.value
+                    break
+            user_id = ''
+            for cookie in self.session.cookies:
+                if cookie.name == 'userId' and cookie.value:
+                    user_id = cookie.value
+                    break
+
+            headers = {
+                'Accept': 'application/json, text/plain, */*',
+                'Content-Type': 'application/json;charset=UTF-8',
+                'Origin': 'https://cloud.huawei.com',
+                'Referer': 'https://cloud.huawei.com/home',
+            }
+            if csrf_token:
+                headers['CSRFToken'] = csrf_token
+                headers['csrftoken'] = csrf_token
+            if user_id:
+                headers['userId'] = user_id
+
+            trace_id = f"25001_02_{int(time.time())}_{random.randint(10000000, 99999999)}"
+            resp = self.session.post(
+                f"https://cloud.huawei.com/html/queryCookieValuesByNames?traceId={trace_id}",
+                headers=headers,
+                json={},
+                timeout=30,
+                verify=False,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                server_cookies = data.get('cookies', {})
+                if server_cookies:
+                    for name, value in server_cookies.items():
+                        if value is not None:
+                            self.session.cookies.set(str(name), str(value), domain='cloud.huawei.com')
+                    logger.debug("queryCookieValuesByNames 获取 %d 项 cookies", len(server_cookies))
+            else:
+                logger.debug("queryCookieValuesByNames 返回状态码: %s", resp.status_code)
+        except Exception as e:
+            logger.debug("queryCookieValuesByNames 失败: %s", e)
+
+        # 确保 isLogin=1 被设置（即使 queryCookieValuesByNames 没返回）
+        has_is_login = False
+        for cookie in self.session.cookies:
+            if cookie.name == 'isLogin':
+                has_is_login = True
+                break
+        if not has_is_login:
+            self.session.cookies.set('isLogin', '1', domain='cloud.huawei.com')
+
     # ==================== Cookie 管理 ====================
+
+    def _clear_oauth_session_cookies(self) -> None:
+        """清除第一次 OAuth 流程设置的干扰 cookies
+
+        当 login() 返回 need_verify=True 时，_step_password_login 已经走了一遍
+        _finish_oauth，设置了 cloud.huawei.com 域的 JSESSIONID、loginID、token 等 cookies。
+        verify_device 再次调用 _finish_oauth 时，这些旧 cookies 会导致 OAuth login 失败
+        （服务端可能误判为已授权或使用过期的 loginID/token）。
+
+        需要清除的 cookies：
+        - cloud.huawei.com 域: JSESSIONID, loginID, token（第一次 OAuth 设置的）
+        - .huawei.com 域: CASLOGINSITE, LOGINACCSITE, HuaweiID_CAS_ISCASLOGIN（可能被旧值覆盖）
+
+        保留的 cookies：
+        - id1 域: CASTGC, JSESSIONID, hwid_cas_sid, sid 等（认证流程需要的）
+        - cloud.huawei.com 域: userId, isLogin, CSRFToken, loginSecLevel 等（session 状态）
+        """
+        # 清除 cloud.huawei.com 域的 OAuth 会话 cookies
+        # JSESSIONID 可能没有显式 Domain（domain_specified=False），
+        # loginID/token 有 Domain=cloud.huawei.com
+        to_remove = []
+        for cookie in self.session.cookies:
+            is_cloud_domain = (
+                cookie.domain == 'cloud.huawei.com'
+                or (cookie.domain and cookie.domain.endswith('.cloud.huawei.com'))
+            )
+            if is_cloud_domain and cookie.name in ('JSESSIONID', 'loginID', 'token'):
+                to_remove.append(cookie)
+        for cookie in to_remove:
+            self.session.cookies.clear(cookie.domain, cookie.path, cookie.name)
 
     def _get_cookies_dict(self) -> Dict[str, str]:
         return {c.name: c.value for c in self.session.cookies}

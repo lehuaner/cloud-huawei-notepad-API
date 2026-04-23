@@ -23,8 +23,11 @@ class HuaweiCloudClient:
         result = client.login("手机号", "密码")
 
         if result.need_verify:
+            # 已获取 CSRFToken，session 可用
+            # 获取设备列表并触发发送验证码
+            send_result = client.send_verify_code(device_index=0)
             code = input("验证码: ")
-            result = client.verify_device(code)
+            client.verify_device(code)
 
         # 保存 cookies 供下次使用
         cookies = result.cookies
@@ -90,15 +93,37 @@ class HuaweiCloudClient:
                      传入后可跳过新设备验证
 
         Returns:
-            LoginResult — 检查 need_verify 判断是否需要验证码
+            LoginResult — 检查 need_verify 判断是否需要验证码。
+            即使 need_verify=True，cookies 中也已包含 CSRFToken，session 可用。
         """
         result = self._auth.login(phone, password, cookies=cookies)
-        if result.success and not result.need_verify:
+        if result.success:
+            self._apply_login_result(result)
+        return result
+
+    def send_verify_code(self, device_index: int = 0) -> LoginResult:
+        """获取验证设备列表（同时触发服务端发送验证码）
+
+        在 login() 返回 need_verify=True 后调用。
+        此方法会获取验证设备列表，服务端在返回设备列表时已自动向默认设备
+        发送验证码。
+
+        Args:
+            device_index: 选择要验证的设备序号，默认 0（第一个设备）
+
+        Returns:
+            LoginResult — 成功时 need_verify=True，auth_devices 包含设备列表
+        """
+        result = self._auth.send_verify_code(device_index=device_index)
+        if result.success:
             self._apply_login_result(result)
         return result
 
     def verify_device(self, verify_code: str) -> LoginResult:
-        """提交设备验证码
+        """提交设备验证码，完成设备信任认证
+
+        在 send_verify_code() 后调用，提交用户收到的验证码。
+        验证成功后会信任当前浏览器，下次登录不再需要验证。
 
         Args:
             verify_code: 设备收到的验证码
@@ -118,6 +143,7 @@ class HuaweiCloudClient:
         cookies 分为已信任和未信任两种：
         - 已信任的 cookies 可使用所有模块 (联系人、备忘录、图库、云盘、查找设备)
         - 未信任的 cookies 仅可使用查找设备，其他模块不可用
+          (loginSecLevel=0 表示未信任设备)
 
         会通过 heartbeatCheck(checkType=1) 验证会话是否有效，
         如果 cookies 已过期则抛出 RuntimeError。
@@ -142,6 +168,16 @@ class HuaweiCloudClient:
             )
 
         return client
+
+    @property
+    def need_verify(self) -> bool:
+        """当前会话是否需要设备信任认证
+
+        通过 loginSecLevel cookie 判断：
+        - loginSecLevel=0 表示设备未信任，受限模块（联系人、图库、备忘录、云盘）不可用
+        - loginSecLevel>0 表示设备已信任，所有模块可用
+        """
+        return self._cookies_dict.get('loginSecLevel', '0') == '0'
 
     # ==================== 心跳保活 ====================
 
@@ -401,10 +437,214 @@ class HuaweiCloudClient:
             self._find_device = self._create_module("find_device")
         return self._find_device
 
+    # ==================== 门户级 API ====================
+
+    def get_common_param(self) -> dict:
+        """获取通用参数"""
+        trace_id = _generate_traceid("00001")
+        resp = self._session.post(
+            f"https://cloud.huawei.com/html/getCommonParam?traceId={trace_id}",
+            headers=self._module_headers(),
+            json={"traceId": trace_id},
+            timeout=30, verify=False,
+        )
+        data = self._parse_portal_response(resp)
+        if "error" in data:
+            return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
+        code = self._get_portal_code(data)
+        return {"ok": code == "0", "code": code,
+                "msg": "通用参数" if code == "0" else f"失败({code})", "data": data}
+
+    def get_home_data(self, simplify: bool = True) -> dict:
+        """获取首页数据 (含 deviceIdForHeader)
+
+        Args:
+            simplify: 是否精简返回数据，默认 True。精简后仅保留用户相关的
+                     关键字段，去除大量无用配置项和长链接。
+        """
+        trace_id = _generate_traceid("00001")
+        resp = self._session.post(
+            f"https://cloud.huawei.com/html/getHomeData?traceId={trace_id}",
+            headers=self._module_headers(),
+            json={"traceId": trace_id},
+            timeout=30, verify=False,
+        )
+        data = self._parse_portal_response(resp)
+        if "error" in data:
+            return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
+        code = self._get_portal_code(data)
+        dev_id = data.get("deviceIdForHeader", "")
+        if dev_id and not self._device_id:
+            self._device_id = str(dev_id)
+            self._update_modules_csrf(self._csrf_token)
+        if simplify:
+            data = self._simplify_home_data(data)
+        return {"ok": code == "0", "code": code,
+                "msg": "首页数据" if code == "0" else f"失败({code})", "data": data}
+
+    @staticmethod
+    def _simplify_home_data(data: dict) -> dict:
+        """精简首页数据，保留关键字段"""
+        return {
+            "accountName": data.get("accountName", ""),
+            "accountType": data.get("accountType", 0),
+            "countryCode": data.get("countryCode", ""),
+            "userid": data.get("userid", ""),
+            "userEmail": data.get("userEmail", ""),
+            "userStatus": data.get("userStatus", ""),
+            "userTimeZone": data.get("userTimeZone", ""),
+            "gradeCode": data.get("gradeCode", ""),
+            "gradeState": data.get("gradeState", 0),
+            "hexCode": data.get("hexCode", ""),
+            "isLogin": data.get("isLogin", "0"),
+            "validToTime": data.get("validToTime", 0),
+            "deviceIdForHeader": data.get("deviceIdForHeader", ""),
+            "moduleList": data.get("moduleList", []),
+            "notifySwitch": data.get("notifySwitch", 0),
+            "cloudPhotoSwitch": data.get("cloudPhotoSwitch", 0),
+            "huaweiNoteSwitch": data.get("huaweiNoteSwitch", "false"),
+            "huaweiNoteOperationSwitch": data.get("huaweiNoteOperationSwitch", 0),
+            "newBusinessModelSwitch": data.get("newBusinessModelSwitch", 0),
+            "enableNewAppDataManagement": data.get("enableNewAppDataManagement", False),
+            "maxUploadSize": data.get("maxUploadSize", 0),
+            "maxDownloadSize": data.get("maxDownloadSize", 0),
+            "maxUploadSingleFileSize": data.get("maxUploadSingleFileSize", 0),
+            "maxUploadNum": data.get("maxUploadNum", 0),
+            "maxDownloadNum": data.get("maxDownloadNum", 0),
+            "contactMaxSize": data.get("contactMaxSize", 0),
+        }
+
+    def get_cookies(self) -> dict:
+        """查询服务端 Cookie 值"""
+        trace_id = _generate_traceid("25001")
+        resp = self._session.post(
+            f"https://cloud.huawei.com/html/queryCookieValuesByNames?traceId={trace_id}",
+            headers=self._module_headers(),
+            json={"traceId": trace_id},
+            timeout=30, verify=False,
+        )
+        data = self._parse_portal_response(resp)
+        if "error" in data:
+            return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
+        cookies = data.get("cookies", {})
+        code = self._get_portal_code(data)
+        return {"ok": code == "0", "code": code,
+                "msg": f"获取{len(cookies)}项" if code == "0" else f"失败({code})",
+                "data": cookies}
+
+    def heartbeat_check(self) -> dict:
+        """心跳检测，保持会话活跃"""
+        trace_id = _generate_traceid("07100")
+        url = f"https://cloud.huawei.com/heartbeatCheck?checkType=1&traceId={trace_id}"
+        resp = self._session.get(
+            url, headers=self._module_headers(), timeout=30, verify=False,
+        )
+        data = self._parse_portal_response(resp)
+        if "error" in data:
+            return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
+        code = self._get_portal_code(data)
+        return {"ok": code == "0", "code": code,
+                "msg": "心跳正常" if code == "0" else f"失败({code})"}
+
+    def notify_poll(self, tag: str = "0", module: str = "portal", timeout: int = 60) -> dict:
+        """通知轮询 (长轮询)"""
+        trace_id = _generate_traceid("07100")
+        body = {"tag": tag, "module": module, "traceId": trace_id}
+        resp = self._session.post(
+            "https://cloud.huawei.com/notify",
+            headers=self._module_headers(),
+            json=body, timeout=timeout, verify=False,
+        )
+        data = self._parse_portal_response(resp)
+        if "error" in data:
+            return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
+        code = self._get_portal_code(data)
+        new_tag = data.get("tag", tag)
+        if code == "0":
+            return {"ok": True, "code": code, "msg": "有新通知", "data": data, "tag": new_tag}
+        elif code == "102":
+            return {"ok": True, "code": code, "msg": "长轮询超时(无新通知)", "data": data, "tag": new_tag}
+        else:
+            return {"ok": False, "code": code, "msg": f"失败(code={code})", "data": data, "tag": new_tag}
+
+    def get_space_info(self, simplify: bool = True) -> dict:
+        """获取用户云空间容量等信息
+
+        Args:
+            simplify: 是否精简返回数据，默认 True。精简时 deviceList 仅保留
+                     deviceAliasName、deviceType、terminalType、frequentlyUsed、
+                     loginTime、logoutTime、deviceId 等关键字段。
+        """
+        trace_id = _generate_traceid("07102")
+        resp = self._session.post(
+            f"https://cloud.huawei.com/nsp/getInfos?traceId={trace_id}",
+            headers=self._module_headers(),
+            json={"traceId": trace_id},
+            timeout=30, verify=False,
+        )
+        data = self._parse_portal_response(resp)
+        if "error" in data:
+            return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
+        code = self._get_portal_code(data)
+        ok = code in ("0", "") and "deviceList" in data
+        if ok and simplify:
+            data = self._simplify_space_info(data)
+        return {"ok": ok, "code": code or "0",
+                "msg": "空间信息" if ok else f"失败({code})", "data": data}
+
+    @staticmethod
+    def _simplify_space_info(data: dict) -> dict:
+        """精简空间信息，保留关键字段"""
+        result = {
+            "accountSensit": data.get("accountSensit", ""),
+            "userName": data.get("userName", ""),
+            "userImg": data.get("userImg", ""),
+        }
+
+        def _simplify_device(device: dict) -> dict:
+            return {
+                "deviceAliasName": device.get("deviceAliasName", ""),
+                "deviceType": device.get("deviceType", 0),
+                "terminalType": device.get("terminalType", ""),
+                "frequentlyUsed": device.get("frequentlyUsed", 0),
+                "loginTime": device.get("loginTime", ""),
+                "logoutTime": device.get("logoutTime", ""),
+                "deviceId": device.get("deviceId", ""),
+            }
+
+        result["deviceList"] = [_simplify_device(d) for d in data.get("deviceList", [])]
+        return result
+
+    def refresh_cookies(self) -> dict:
+        """刷新 cookies 并更新客户端状态"""
+        trace_id = _generate_traceid("25001")
+        resp = self._session.post(
+            f"https://cloud.huawei.com/html/queryCookieValuesByNames?traceId={trace_id}",
+            headers=self._module_headers(),
+            json={"traceId": trace_id},
+            timeout=30, verify=False,
+        )
+        data = self._parse_portal_response(resp)
+        if "error" in data:
+            return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
+        cookies = data.get("cookies", {})
+        code = self._get_portal_code(data)
+        if code == "0" and cookies:
+            self._csrf_token = cookies.get("CSRFToken", self._csrf_token)
+            self._user_id = cookies.get("userId", self._user_id)
+            self._update_modules_csrf(self._csrf_token)
+        return {"ok": code == "0", "code": code,
+                "msg": f"刷新{len(cookies)}项" if code == "0" else f"失败({code})"}
+
     # ==================== 内部方法 ====================
 
     def _apply_login_result(self, result: LoginResult) -> None:
-        """登录成功后更新内部状态"""
+        """登录成功后更新内部状态
+
+        现在登录完成后 cookies 已包含完整的 cloud.huawei.com 域数据，
+        包括 CSRFToken、userId、isLogin、loginSecLevel、functionSupport、
+        webOfficeEditToken、shareToken 等。
+        """
         self._cookies_dict = result.cookies
         self._csrf_token = result.cookies.get('CSRFToken', '')
         self._user_id = result.cookies.get('userId', '')
@@ -494,26 +734,47 @@ class HuaweiCloudClient:
             return False
 
     def _ensure_device_id(self) -> None:
-        """如果 device_id 为空，尝试从 getHomeData 获取"""
+        """如果 device_id 为空，尝试从 get_home_data 获取"""
         if self._device_id:
             return
         try:
-            from .base import _generate_traceid
-            trace_id = _generate_traceid("00001")
-            resp = self._session.post(
-                f"https://cloud.huawei.com/html/getHomeData?traceId={trace_id}",
-                headers=self._module_headers(),
-                json={"traceId": trace_id},
-                timeout=30,
-                verify=False,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                dev_id = data.get("deviceIdForHeader", "")
+            result = self.get_home_data()
+            if result.get("ok"):
+                dev_id = result.get("data", {}).get("deviceIdForHeader", "")
                 if dev_id:
                     self._device_id = str(dev_id)
         except Exception as e:
             logger.debug("获取 device_id 失败: %s", e)
+
+    @staticmethod
+    def _get_portal_code(data: dict) -> str:
+        """从门户级响应中提取 code"""
+        if "code" in data:
+            return str(data["code"])
+        return str(data.get("Result", {}).get("code", ""))
+
+    @staticmethod
+    def _parse_portal_response(resp: requests.Response) -> dict:
+        """解析门户级 API 响应，统一处理错误"""
+        try:
+            if resp.status_code == 200:
+                data = resp.json()
+                code = str(data.get("code", ""))
+                if code == "402":
+                    return {"error": "设备未认证(402)，请先完成设备信任认证", "_code": "402"}
+                result_code = str(data.get("Result", {}).get("code", ""))
+                if result_code == "402":
+                    return {"error": "设备未认证(402)，请先完成设备信任认证", "_code": "402"}
+                return data
+            if resp.status_code == 401:
+                return {"error": "认证失败(401)，cookies 已过期", "_code": "401"}
+            if resp.status_code == 402:
+                return {"error": "设备未认证(402)，请先完成设备信任认证", "_code": "402"}
+            return {"error": f"HTTP {resp.status_code}", "_code": str(resp.status_code)}
+        except requests.RequestException as e:
+            return {"error": "请求异常", "detail": str(e), "_code": "-1"}
+        except Exception as e:
+            return {"error": "响应解析失败", "detail": str(e), "_code": "-2"}
 
     def _module_headers(self) -> Dict[str, str]:
         return {

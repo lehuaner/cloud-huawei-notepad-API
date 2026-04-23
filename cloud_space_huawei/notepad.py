@@ -33,85 +33,82 @@ class NotepadModule(BaseModule):
         notes = client.notepad.get_notes_list()
     """
 
-    # ========== 基础 API ==========
-
-    def get_common_param(self) -> Result:
-        """获取通用参数"""
-        data = self._post("https://cloud.huawei.com/html/getCommonParam", {}, "00001")
-        if "error" in data:
-            return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
-        code = self._get_code(data)
-        return {"ok": code == "0", "code": code,
-                "msg": "通用参数" if code == "0" else f"失败({code})", "data": data}
-
-    def get_home_data(self) -> Result:
-        """获取首页数据 (含 deviceIdForHeader)"""
-        data = self._post("https://cloud.huawei.com/html/getHomeData", {}, "00001")
-        if "error" in data:
-            return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
-        code = self._get_code(data)
-        return {"ok": code == "0", "code": code,
-                "msg": "首页数据" if code == "0" else f"失败({code})", "data": data}
-
-    def get_cookies(self) -> Result:
-        """查询 Cookie 值"""
-        data = self._post("https://cloud.huawei.com/html/queryCookieValuesByNames", {}, "25001")
-        if "error" in data:
-            return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
-        cookies = data.get("cookies", {})
-        code = self._get_code(data)
-        return {"ok": code == "0", "code": code,
-                "msg": f"获取{len(cookies)}项" if code == "0" else f"失败({code})",
-                "data": cookies}
-
-    def heartbeat_check(self) -> Result:
-        """心跳检测，保持会话活跃"""
-        trace_id = _generate_traceid("07100")
-        url = f"https://cloud.huawei.com/heartbeatCheck?checkType=1&traceId={trace_id}"
-        data = self._get(url, "07100")
-        if "error" in data:
-            return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
-        code = self._get_code(data)
-        return {"ok": code == "0", "code": code,
-                "msg": "心跳正常" if code == "0" else f"失败({code})"}
-
-    def notify_poll(self, tag: str = "0", module: str = "portal", timeout: int = 60) -> Result:
-        """通知轮询 (长轮询)"""
-        body = {"tag": tag, "module": module}
-        data = self._post("https://cloud.huawei.com/notify", body, "07100", timeout=timeout)
-        if "error" in data:
-            return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
-        code = self._get_code(data)
-        new_tag = data.get("tag", tag)
-        if code == "0":
-            return {"ok": True, "code": code, "msg": "有新通知", "data": data, "tag": new_tag}
-        elif code == "102":
-            return {"ok": True, "code": code, "msg": "长轮询超时(无新通知)", "data": data, "tag": new_tag}
-        else:
-            return {"ok": False, "code": code, "msg": f"失败(code={code})", "data": data, "tag": new_tag}
-
-    def get_space_info(self) -> Result:
-        """获取用户云空间容量等信息"""
-        trace_id = _generate_traceid("07102")
-        url = f"https://cloud.huawei.com/nsp/getInfos?traceId={trace_id}"
-        data = self._post(url, {}, "07102")
-        if "error" in data:
-            return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
-        code = self._get_code(data)
-        ok = code in ("0", "") and "deviceList" in data
-        return {"ok": ok, "code": code or "0",
-                "msg": "空间信息" if ok else f"失败({code})", "data": data}
-
     # ========== 备忘录 API ==========
 
-    def get_tags(self) -> Result:
-        """获取标签列表"""
+    def get_tags(self, simplify: bool = True) -> Result:
+        """获取标签列表
+
+        Args:
+            simplify: 是否精简返回数据，默认 True。精简时仅返回 etag、guid、
+                     name、type、color 等关键字段。
+        """
         data = self._post("https://cloud.huawei.com/notepad/notetag/query", {"index": 0}, "03135")
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         rsp = data.get("rspInfo", {})
-        result_data = {"backLoglist": rsp.get("backLoglist", []), "noteList": rsp.get("noteList", [])}
-        total = len(result_data["backLoglist"]) + len(result_data["noteList"])
+
+        def _parse_full_item(item: Dict[str, Any]) -> Dict[str, Any]:
+            result: Dict[str, Any] = dict(item)
+            if "data" in result and isinstance(result["data"], str):
+                try:
+                    content_obj = json.loads(result["data"])
+                    if isinstance(content_obj, dict):
+                        result["data"] = content_obj
+                        if "content" in content_obj and isinstance(content_obj["content"], dict):
+                            content_inner = content_obj["content"]
+                            for field in ["data3", "data6"]:
+                                if field in content_inner and isinstance(content_inner[field], str):
+                                    try:
+                                        content_inner[field] = json.loads(content_inner[field])
+                                    except json.JSONDecodeError:
+                                        pass
+                except json.JSONDecodeError:
+                    pass
+            return result
+
+        def _parse_simple_item(item: Dict[str, Any]) -> Dict[str, Any]:
+            result: Dict[str, Any] = {"etag": item.get("etag", ""), "guid": item.get("guid", "")}
+            if "data" in item and isinstance(item["data"], str):
+                try:
+                    content_obj = json.loads(item["data"])
+                    if isinstance(content_obj, dict) and "content" in content_obj:
+                        content_inner = content_obj["content"]
+                        if isinstance(content_inner, dict):
+                            if not result["guid"]:
+                                result["guid"] = content_inner.get("guid", "")
+                            result["name"] = content_inner.get("name", "")
+                            result["type"] = content_inner.get("type", 0)
+                            result["color"] = content_inner.get("color", "")
+                            result["user_order"] = content_inner.get("user_order", 0)
+                            result["create_time"] = content_inner.get("create_time", 0)
+                            result["last_update_time"] = content_inner.get("last_update_time", 0)
+                            result["version"] = content_inner.get("version", "")
+                            result["delete_flag"] = content_inner.get("delete_flag", 0)
+
+                            for field in ["data3", "data6"]:
+                                if field in content_inner and isinstance(content_inner[field], str):
+                                    try:
+                                        content_inner[field] = json.loads(content_inner[field])
+                                    except json.JSONDecodeError:
+                                        pass
+
+                            if isinstance(content_inner.get("data3"), dict):
+                                result["folder_name"] = content_inner["data3"].get("mFolderName", "")
+                                result["folder_uuid"] = content_inner["data3"].get("mFolderUuid", "")
+                                result["tag_name"] = content_inner["data3"].get("mTagName", "")
+                except json.JSONDecodeError:
+                    pass
+            return result
+
+        if simplify:
+            back_log_list = [_parse_simple_item(item) for item in rsp.get("backLoglist", [])]
+            note_list = [_parse_simple_item(item) for item in rsp.get("noteList", [])]
+        else:
+            back_log_list = [_parse_full_item(item) for item in rsp.get("backLoglist", [])]
+            note_list = [_parse_full_item(item) for item in rsp.get("noteList", [])]
+
+        result_data = {"backLoglist": back_log_list, "noteList": note_list}
+        total = len(back_log_list) + len(note_list)
         code = self._get_code(data)
         return {"ok": code == "0", "code": code,
                 "msg": f"{total}个标签" if code == "0" else f"失败({code})", "data": result_data}
@@ -206,10 +203,15 @@ class NotepadModule(BaseModule):
                 headers=self._headers(), json=body, timeout=30, verify=False,
             )
             self._sync_cookies(resp)
+            if resp.status_code == 402:
+                return {"ok": False, "code": "402", "msg": "设备未认证(402)，请先完成设备信任认证"}
             if resp.status_code != 200:
                 return {"ok": False, "code": str(resp.status_code), "msg": f"HTTP {resp.status_code}"}
             result = resp.json()
+            # 检查响应体中的 402 code
             code = str(result.get("Result", {}).get("code", "-1"))
+            if code == "402":
+                return {"ok": False, "code": "402", "msg": "设备未认证(402)，请先完成设备信任认证"}
             self._update_start_cursor(result)
             rsp = result.get("rspInfo", {})
             real_guid = rsp.get("guid", note_guid)
@@ -269,12 +271,17 @@ class NotepadModule(BaseModule):
                 headers=self._headers(), json=body, timeout=30, verify=False,
             )
             self._sync_cookies(resp)
+            if resp.status_code == 402:
+                return {"ok": False, "code": "402", "msg": "设备未认证(402)，请先完成设备信任认证"}
             if resp.status_code != 200:
                 return {"ok": False, "code": str(resp.status_code), "msg": f"HTTP {resp.status_code}"}
             if not resp.text:
                 return {"ok": True, "code": "0", "msg": "更新成功", "data": {"guid": guid}}
             result = resp.json()
+            # 检查响应体中的 402 code
             code = str(result.get("Result", {}).get("code", "-1"))
+            if code == "402":
+                return {"ok": False, "code": "402", "msg": "设备未认证(402)，请先完成设备信任认证"}
             self._update_start_cursor(result)
             rsp = result.get("rspInfo", {})
             return {"ok": code == "0", "code": code,
@@ -351,15 +358,4 @@ class NotepadModule(BaseModule):
         return {"ok": code == "0", "code": code,
                 "msg": "预签名成功" if code == "0" else f"失败({code})", "data": data}
 
-    def refresh_cookies(self) -> Result:
-        """刷新 cookies 并更新客户端状态"""
-        data = self._post("https://cloud.huawei.com/html/queryCookieValuesByNames", {}, "25001")
-        if "error" in data:
-            return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
-        cookies = data.get("cookies", {})
-        code = self._get_code(data)
-        if code == "0" and cookies:
-            self._csrf_token = cookies.get("CSRFToken", self._csrf_token)
-            self._user_id = cookies.get("userId", self._user_id)
-        return {"ok": code == "0", "code": code,
-                "msg": f"刷新{len(cookies)}项" if code == "0" else f"失败({code})"}
+

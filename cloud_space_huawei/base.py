@@ -111,9 +111,19 @@ class BaseModule:
             )
             self._sync_cookies(resp)
             if resp.status_code == 200:
-                return resp.json()
+                data = resp.json()
+                # 检查响应体中的 402 code（未认证设备）
+                code = str(data.get("code", ""))
+                if code == "402":
+                    return {"error": "设备未认证(402)，请先完成设备信任认证", "_code": "402"}
+                result_code = str(data.get("Result", {}).get("code", ""))
+                if result_code == "402":
+                    return {"error": "设备未认证(402)，请先完成设备信任认证", "_code": "402"}
+                return data
             if resp.status_code == 401:
                 return {"error": "认证失败(401)，cookies 已过期", "_code": "401"}
+            if resp.status_code == 402:
+                return {"error": "设备未认证(402)，请先完成设备信任认证", "_code": "402"}
             return {"error": f"HTTP {resp.status_code}", "_code": str(resp.status_code)}
         except requests.RequestException as e:
             return {"error": "请求异常", "detail": str(e), "_code": "-1"}
@@ -132,9 +142,19 @@ class BaseModule:
             )
             self._sync_cookies(resp)
             if resp.status_code == 200:
-                return resp.json()
+                data = resp.json()
+                # 检查响应体中的 402 code（未认证设备）
+                code = str(data.get("code", ""))
+                if code == "402":
+                    return {"error": "设备未认证(402)，请先完成设备信任认证", "_code": "402"}
+                result_code = str(data.get("Result", {}).get("code", ""))
+                if result_code == "402":
+                    return {"error": "设备未认证(402)，请先完成设备信任认证", "_code": "402"}
+                return data
             if resp.status_code == 401:
                 return {"error": "认证失败(401)，cookies 已过期", "_code": "401"}
+            if resp.status_code == 402:
+                return {"error": "设备未认证(402)，请先完成设备信任认证", "_code": "402"}
             return {"error": f"HTTP {resp.status_code}", "_code": str(resp.status_code)}
         except requests.RequestException as e:
             return {"error": "请求异常", "detail": str(e), "_code": "-1"}

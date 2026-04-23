@@ -91,6 +91,8 @@ print(resp.json())
 | `login(phone, password, cookies=None)` | Login with phone/password, returns `LoginResult` |
 | `verify_device(verify_code)` | Submit device verification code |
 | `from_cookies(cookies)` | Class method, restore session from cookies dict |
+| `get_home_data(simplify=True)` | Get home data (includes deviceIdForHeader), simplified when simplify=True |
+| `get_space_info(simplify=True)` | Get space info, simplified when simplify=True |
 
 #### Properties
 
@@ -102,6 +104,33 @@ print(resp.json())
 | `gallery` | `GalleryModule` | Gallery module (skeleton) |
 | `drive` | `DriveModule` | Drive module (skeleton) |
 | `find_device` | `FindDeviceModule` | Find device module (skeleton) |
+
+### Unified Return Format
+
+All submodule methods return:
+
+```python
+{
+    "ok": bool,       # Whether the operation succeeded
+    "code": str,      # Status code, "0" means success
+    "msg": str,       # Human-readable message
+    "data": ...       # Specific data
+}
+```
+
+### Notepad `NotepadModule`
+
+| Method | Description |
+|--------|-------------|
+| `get_tags(simplify=True)` | Get tag list, simplified when simplify=True |
+| `get_notes_list(index, status, guids)` | Get notes list |
+| `get_note_detail(guid, kind, start_cursor)` | Get note detail |
+| `create_note(title, content_text, tag_id)` | Create a new note |
+| `update_note(guid, etag, title, content_text, ...)` | Update a note |
+| `sync(ctag_note_info, ctag_task_info, start_cursor)` | Sync operation |
+| `get_task_detail(guid, ctag_task_info, start_cursor)` | Query task detail |
+| `get_graffiti_data(asset_id, record_id, version_id, kind)` | Get graffiti data |
+| `pre_process_file(need_to_sign_url, http_method, generate_sign_flag)` | File pre-signing |
 
 ### Unified Return Format
 

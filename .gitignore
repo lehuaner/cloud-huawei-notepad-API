@@ -28,6 +28,9 @@ login/
 登录到被迫登出 - 副本/
 一些操作/
 登录但不验证/
+登录但不认证/
+认证-发送验证码-返回验证码-信任浏览器/
+_/
 # IDE
 .vscode/
 .idea/
@@ -43,3 +46,7 @@ todo
 note_structure_analysis.json
 hertbeatcheck
 queryCookieValuesByNames
+notepad_tags_result.json
+login_no_verify.py
+首页数据
+空间信息
