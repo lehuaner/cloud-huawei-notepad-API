@@ -93,6 +93,7 @@ print(resp.json())
 | `from_cookies(cookies)` | Class method, restore session from cookies dict |
 | `get_home_data(simplify=True)` | Get home data (includes deviceIdForHeader), simplified when simplify=True |
 | `get_space_info(simplify=True)` | Get space info, simplified when simplify=True |
+| `get_common_param(simplify=True)` | Get common parameters, simplified when simplify=True |
 
 #### Properties
 
@@ -123,7 +124,7 @@ All submodule methods return:
 | Method | Description |
 |--------|-------------|
 | `get_tags(simplify=True)` | Get tag list, simplified when simplify=True |
-| `get_notes_list(index, status, guids)` | Get notes list |
+| `get_notes_list(index, status, guids, simplify=True)` | Get notes list, simplified when simplify=True |
 | `get_note_detail(guid, kind, start_cursor)` | Get note detail |
 | `create_note(title, content_text, tag_id)` | Create a new note |
 | `update_note(guid, etag, title, content_text, ...)` | Update a note |

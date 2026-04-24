@@ -113,26 +113,107 @@ class NotepadModule(BaseModule):
         return {"ok": code == "0", "code": code,
                 "msg": f"{total}个标签" if code == "0" else f"失败({code})", "data": result_data}
 
-    def get_notes_list(self, index: int = 0, status: int = 0, guids: str = "") -> Result:
-        """获取笔记列表"""
+    def get_notes_list(self, index: int = 0, status: int = 0, guids: str = "", simplify: bool = True) -> Result:
+        """获取笔记列表
+
+        Args:
+            index: 分页索引
+            status: 状态
+            guids: 笔记 guids
+            simplify: 是否精简返回数据，默认 True。精简时仅保留关键字段，
+                     去除大量无关信息。
+        """
         body: Dict[str, Any] = {"index": index, "status": status, "guids": guids}
         data = self._post("https://cloud.huawei.com/notepad/simplenote/query", body, "03131")
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         self._update_start_cursor(data)
         rsp = data.get("rspInfo", {})
+
+        def _parse_simple_note_item(item: Dict[str, Any]) -> Dict[str, Any]:
+            """精简解析笔记/任务项"""
+            result: Dict[str, Any] = {
+                "etag": item.get("etag", ""),
+                "guid": item.get("guid", ""),
+                "uuid": item.get("uuid", ""),
+                "kind": item.get("kind", ""),
+                "status": item.get("status", 0),
+                "expireTime": item.get("expireTime", 0),
+                "recycleTime": item.get("recycleTime", 0),
+            }
+            if "data" in item and isinstance(item["data"], str):
+                try:
+                    data_obj = json.loads(item["data"])
+                    if isinstance(data_obj, dict):
+                        # 任务项字段
+                        if "mBody" in data_obj:
+                            result["body"] = data_obj.get("mBody", "")
+                            result["complete"] = data_obj.get("mComplete", 0)
+                            result["modifiedTime"] = data_obj.get("mModifiedTime", 0)
+                            result["dateCompleted"] = data_obj.get("mDateCompleted", 0)
+                            result["tagUuid"] = data_obj.get("mTagUuid", "")
+                        # 笔记项字段
+                        elif "created" in data_obj:
+                            result["created"] = data_obj.get("created", 0)
+                            if "data10" in data_obj:
+                                try:
+                                    data10_obj = json.loads(data_obj["data10"])
+                                    if isinstance(data10_obj, dict):
+                                        result["title"] = data10_obj.get("data1", "")
+                                        result["subTitle"] = data10_obj.get("subTitle", "")
+                                except json.JSONDecodeError:
+                                    pass
+                except json.JSONDecodeError:
+                    pass
+            return result
+
+        def _parse_full_note_item(item: Dict[str, Any]) -> Dict[str, Any]:
+            """完整解析笔记/任务项"""
+            result = item.copy()
+            if "data" in result and isinstance(result["data"], str):
+                try:
+                    data_obj = json.loads(result["data"])
+                    result["data"] = data_obj
+                    if isinstance(data_obj, dict):
+                        # 解析嵌套的 JSON 字段
+                        for field in ["data3", "data5", "data6", "data10"]:
+                            if field in data_obj and isinstance(data_obj[field], str):
+                                try:
+                                    data_obj[field] = json.loads(data_obj[field])
+                                except json.JSONDecodeError:
+                                    pass
+                except json.JSONDecodeError:
+                    pass
+            return result
+
+        if simplify:
+            task_list = [_parse_simple_note_item(item) for item in rsp.get("taskList", [])]
+            discard_list = [_parse_simple_note_item(item) for item in rsp.get("discardList", [])]
+            note_list = [_parse_simple_note_item(item) for item in rsp.get("noteList", [])]
+        else:
+            task_list = [_parse_full_note_item(item) for item in rsp.get("taskList", [])]
+            discard_list = [_parse_full_note_item(item) for item in rsp.get("discardList", [])]
+            note_list = [_parse_full_note_item(item) for item in rsp.get("noteList", [])]
+
         result_data = {
-            "taskList": rsp.get("taskList", []),
-            "discardList": rsp.get("discardList", []),
-            "noteList": rsp.get("noteList", []),
+            "taskList": task_list,
+            "discardList": discard_list,
+            "noteList": note_list,
         }
-        total = len(result_data["taskList"]) + len(result_data["discardList"]) + len(result_data["noteList"])
+        total = len(task_list) + len(discard_list) + len(note_list)
         code = self._get_code(data)
         return {"ok": code == "0", "code": code,
                 "msg": f"{total}条笔记" if code == "0" else f"失败({code})", "data": result_data}
 
-    def get_note_detail(self, guid: str, kind: str = "note", start_cursor: Optional[str] = None) -> Result:
-        """获取笔记详情"""
+    def get_note_detail(self, guid: str, kind: str = "newnote", start_cursor: Optional[str] = None) -> Result:
+        """获取笔记详情
+
+        Args:
+            guid: 笔记 guid（从 get_notes_list 返回的 kind 字段获取）
+            kind: 笔记类型，默认 "newnote"。可从 get_notes_list 返回的 kind 字段获取，
+                  现代备忘录笔记通常为 "newnote"，老格式为 "note"
+            start_cursor: 同步游标
+        """
         body: Dict[str, Any] = {
             "ctagNoteInfo": "", "startCursor": start_cursor or self._start_cursor,
             "guid": guid, "kind": kind,
@@ -143,24 +224,76 @@ class NotepadModule(BaseModule):
         self._update_start_cursor(data)
         rsp = data.get("rspInfo", {})
         code = self._get_code(data)
+        desc = str(data.get("Result", {}).get("desc", ""))
+
+        # 检查是否真正成功：code=0 但 desc="Resource not found" 表示笔记未找到
+        if code == "0" and desc.lower() == "resource not found":
+            return {"ok": False, "code": code, "msg": "笔记未找到(Resource not found)，请检查 guid 和 kind 参数",
+                    "data": {}}
+
         note_str = rsp.get("data", "")
         note_data: Dict[str, Any] = {}
         if isinstance(note_str, str) and note_str:
             try:
                 obj = json.loads(note_str)
+                # 提取基本字段
+                note_data["guid"] = obj.get("guid", "")
+                note_data["simpleNote"] = obj.get("simpleNote", "")
+                note_data["fileList"] = obj.get("fileList", [])
+                
+                # 解析 content 字段
                 ct = obj.get("content", {})
                 if isinstance(ct, dict):
-                    note_data = {
-                        "title": ct.get("data5", ""), "content": ct.get("content", ""),
-                        "html_content": ct.get("html_content", ""),
-                        "modified": ct.get("modified", 0), "created": ct.get("created", 0),
-                    }
+                    note_data["created"] = ct.get("created", 0)
+                    note_data["modified"] = ct.get("modified", 0)
+                    note_data["content"] = ct.get("content", "")
+                    note_data["html_content"] = ct.get("html_content", "")
+                    note_data["title"] = ct.get("title", "")
+                    note_data["delete_flag"] = ct.get("delete_flag", 0)
+                    note_data["tag_id"] = ct.get("tag_id", "")
+                    note_data["favorite"] = ct.get("favorite", 0)
+                    note_data["has_attachment"] = ct.get("has_attachment", 0)
+                    note_data["has_todo"] = ct.get("has_todo", 0)
+                    note_data["version"] = ct.get("version", "")
+                    note_data["prefix_uuid"] = ct.get("prefix_uuid", "")
+                    note_data["unstructure"] = ct.get("unstructure", "")
+                    
+                    # 解析 data5 字段（标题等信息）
+                    data5 = ct.get("data5", "")
+                    if isinstance(data5, str) and data5:
+                        try:
+                            data5_obj = json.loads(data5)
+                            if isinstance(data5_obj, dict):
+                                if not note_data.get("title"):
+                                    note_data["title"] = data5_obj.get("data1", "")
+                                note_data["edit_mode"] = data5_obj.get("data2", "")
+                                note_data["data4"] = data5_obj.get("data4", "")
+                        except json.JSONDecodeError:
+                            if not note_data.get("title"):
+                                note_data["title"] = data5
+
+                    # 解析 data10 字段（笔记元信息）
+                    data10 = ct.get("data10", "")
+                    if isinstance(data10, str) and data10:
+                        try:
+                            data10_obj = json.loads(data10)
+                            if isinstance(data10_obj, dict):
+                                note_data["sub_title"] = data10_obj.get("subTitle", "")
+                                note_data["note_version"] = data10_obj.get("version", "")
+                        except json.JSONDecodeError:
+                            pass
             except json.JSONDecodeError:
                 logger.debug("笔记详情 JSON 解析失败: %s", note_str[:100])
+                note_data["raw_data"] = note_str
+        else:
+            # 当 data 字段为空时，记录原始响应
+            note_data["raw_rsp"] = rsp
+            note_data["raw_response"] = data
         attachments = rsp.get("attachments", [])
-        return {"ok": code == "0", "code": code,
-                "msg": "笔记详情" if code == "0" else f"失败({code})",
-                "data": {**note_data, "guid": guid, "etag": rsp.get("etag", ""),
+        is_success = code == "0" and "data" in rsp
+        return {"ok": is_success, "code": code or "0",
+                "msg": "笔记详情" if is_success else f"失败({code})",
+                "data": {**note_data, "etag": rsp.get("etag", ""),
                          "kind": rsp.get("kind", kind),
                          "attachments": attachments, "attachment_count": len(attachments)}}
 

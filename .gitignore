@@ -15,6 +15,7 @@ cookies.json
 trust_data.json
 session.json
 captcha.png
+*.json
 
 # Test / debug
 test_output/
@@ -31,11 +32,13 @@ login/
 登录但不认证/
 认证-发送验证码-返回验证码-信任浏览器/
 _/
+抓包数据/
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+
 
 # OS
 .DS_Store

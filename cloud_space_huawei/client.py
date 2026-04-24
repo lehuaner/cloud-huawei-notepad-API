@@ -439,8 +439,13 @@ class HuaweiCloudClient:
 
     # ==================== 门户级 API ====================
 
-    def get_common_param(self) -> dict:
-        """获取通用参数"""
+    def get_common_param(self, simplify: bool = True) -> dict:
+        """获取通用参数
+
+        Args:
+            simplify: 是否精简返回数据，默认 True。精简时仅保留云空间相关
+                     配置，去除大量无关的网址和链接。
+        """
         trace_id = _generate_traceid("00001")
         resp = self._session.post(
             f"https://cloud.huawei.com/html/getCommonParam?traceId={trace_id}",
@@ -452,8 +457,39 @@ class HuaweiCloudClient:
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = self._get_portal_code(data)
+        if simplify:
+            data = self._simplify_common_param(data)
         return {"ok": code == "0", "code": code,
                 "msg": "通用参数" if code == "0" else f"失败({code})", "data": data}
+
+    @staticmethod
+    def _simplify_common_param(data: dict) -> dict:
+        """精简通用参数，保留云空间相关内容"""
+        return {
+            "code": data.get("code", 0),
+            "info": data.get("info", ""),
+            "lang": data.get("lang", ""),
+            "siteCode": data.get("siteCode", ""),
+            "siteId": data.get("siteId", ""),
+            "portalDomain": data.get("portalDomain", ""),
+            "appBrandId": data.get("appBrandId", ""),
+            "clientType": data.get("clientType", 0),
+            "deviceBrand": data.get("deviceBrand", ""),
+            "deviceBrandId": data.get("deviceBrandId", ""),
+            "deviceManufacturer": data.get("deviceManufacturer", ""),
+            "isGrayWeb": data.get("isGrayWeb", False),
+            "isShowPCClientDownloadEntrance": data.get("isShowPCClientDownloadEntrance", ""),
+            "cookiesUpdateVersion": data.get("cookiesUpdateVersion", ""),
+            "copyDriveFilesMaxNumLimit": data.get("copyDriveFilesMaxNumLimit", 0),
+            "driveMultiDomainSwitch": data.get("driveMultiDomainSwitch", False),
+            "driveMultiDomainUrlExpiredTimestamp": data.get("driveMultiDomainUrlExpiredTimestamp", 0),
+            "cloudPhotoReportEntrySwitch": data.get("cloudPhotoReportEntrySwitch", 0),
+            "moreApplicationDataSwitch": data.get("moreApplicationDataSwitch", 0),
+            "noticeIntervalTime": data.get("noticeIntervalTime", 0),
+            "pointSwitch": data.get("pointSwitch", ""),
+            "toolEcologySwitch": data.get("toolEcologySwitch", 0),
+            "webPayIAP4Switch": data.get("webPayIAP4Switch", False),
+        }
 
     def get_home_data(self, simplify: bool = True) -> dict:
         """获取首页数据 (含 deviceIdForHeader)
