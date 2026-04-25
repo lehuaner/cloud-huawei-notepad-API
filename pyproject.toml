@@ -29,6 +29,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+image = [
+    "Pillow>=9.0",
+]
 dev = [
     "pytest>=7.0",
     "pytest-mock",

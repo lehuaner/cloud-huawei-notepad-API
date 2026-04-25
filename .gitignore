@@ -16,6 +16,7 @@ trust_data.json
 session.json
 captcha.png
 *.json
+*.jpg
 
 # Test / debug
 test_output/
@@ -33,6 +34,7 @@ login/
 认证-发送验证码-返回验证码-信任浏览器/
 _/
 抓包数据/
+downloads/
 # IDE
 .vscode/
 .idea/
@@ -43,7 +45,7 @@ _/
 # OS
 .DS_Store
 Thumbs.db
-todo
+todo.md
 
 # Project data
 note_structure_analysis.json

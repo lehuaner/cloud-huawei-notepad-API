@@ -25,6 +25,53 @@ cloud-space-huawei — 华为云空间 Python SDK
 
 from .client import HuaweiCloudClient
 from .auth import LoginResult
+from .contacts import (
+    parse_simple_contact,
+    TEL_TYPES, TEL_TYPE_MAX,
+    EMAIL_TYPES, EMAIL_TYPE_MAX,
+    IM_TYPES, IM_TYPE_MAX,
+    ADDRESS_TYPES, ADDRESS_TYPE_MAX,
+    DATE_TYPES, DATE_TYPE_MAX,
+    URL_TYPE_MAX,
+    RELATION_TYPES, RELATION_TYPE_MAX,
+    EVENT_TYPES, EVENT_TYPE_MAX,
+)
+from .gallery import (
+    GalleryModule,
+    DEFAULT_ALBUM_CAMERA,
+    DEFAULT_ALBUM_SCREENSHOT,
+    DEFAULT_ALBUM_RECYCLE,
+    DEFAULT_ALBUM_HIDDEN,
+    FILE_TYPE_IMAGE,
+    FILE_TYPE_VIDEO,
+    FILE_TYPE_RECYCLE,
+    THUMB_ORIGINAL,
+    THUMB_CROP,
+    THUMB_LCD,
+)
 
-__all__ = ["HuaweiCloudClient", "LoginResult"]
+__all__ = [
+    "HuaweiCloudClient",
+    "LoginResult",
+    "parse_simple_contact",
+    "TEL_TYPES", "TEL_TYPE_MAX",
+    "EMAIL_TYPES", "EMAIL_TYPE_MAX",
+    "IM_TYPES", "IM_TYPE_MAX",
+    "ADDRESS_TYPES", "ADDRESS_TYPE_MAX",
+    "DATE_TYPES", "DATE_TYPE_MAX",
+    "URL_TYPE_MAX",
+    "RELATION_TYPES", "RELATION_TYPE_MAX",
+    "EVENT_TYPES", "EVENT_TYPE_MAX",
+    "GalleryModule",
+    "DEFAULT_ALBUM_CAMERA",
+    "DEFAULT_ALBUM_SCREENSHOT",
+    "DEFAULT_ALBUM_RECYCLE",
+    "DEFAULT_ALBUM_HIDDEN",
+    "FILE_TYPE_IMAGE",
+    "FILE_TYPE_VIDEO",
+    "FILE_TYPE_RECYCLE",
+    "THUMB_ORIGINAL",
+    "THUMB_CROP",
+    "THUMB_LCD",
+]
 __version__ = "0.2.0"

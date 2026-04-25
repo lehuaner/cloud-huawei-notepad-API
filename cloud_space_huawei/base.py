@@ -103,11 +103,13 @@ class BaseModule:
         trace_prefix: str = "03135",
         timeout: int = 30,
     ) -> Dict[str, Any]:
-        if "traceId" not in body:
-            body["traceId"] = _generate_traceid(trace_prefix)
+        trace_id = body.get("traceId") or _generate_traceid(trace_prefix)
+        body["traceId"] = trace_id
+        headers = self._headers()
+        headers["x-hw-trace-id"] = trace_id
         try:
             resp = self._request_with_retry(
-                "POST", url, headers=self._headers(), json=body, timeout=timeout, verify=False,
+                "POST", url, headers=headers, json=body, timeout=timeout, verify=False,
             )
             self._sync_cookies(resp)
             if resp.status_code == 200:
@@ -129,6 +131,92 @@ class BaseModule:
             return {"error": "请求异常", "detail": str(e), "_code": "-1"}
         except json.JSONDecodeError as e:
             return {"error": "响应解析失败", "detail": str(e), "_code": "-2"}
+
+    def _put(
+        self,
+        url: str,
+        body: Optional[Dict[str, Any]] = None,
+        data: Optional[bytes] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        trace_prefix: str = "03135",
+        trace_id: str = "",
+        timeout: int = 300,
+        use_session: bool = True,
+        allow_redirects: bool = True,
+    ) -> requests.Response:
+        """PUT 请求（原始响应，由调用方处理结果）
+
+        Args:
+            body: JSON 请求体（与 data 互斥）
+            data: 原始字节请求体（与 body 互斥）
+            extra_headers: 额外的请求头，会合并到默认 headers 上
+            trace_prefix: traceId 前缀
+            trace_id: 指定 traceId（为空则自动生成）
+            timeout: 超时秒数
+            use_session: True 用 session（带 cookies），False 用裸 requests
+            allow_redirects: 是否跟随重定向
+
+        Returns:
+            原始 requests.Response 对象
+        """
+        headers = self._headers()
+        if not trace_id:
+            trace_id = _generate_traceid(trace_prefix)
+        headers["x-hw-trace-id"] = trace_id
+        if extra_headers:
+            headers.update(extra_headers)
+
+        kwargs: Dict[str, Any] = {
+            "headers": headers,
+            "timeout": timeout,
+            "verify": False,
+            "allow_redirects": allow_redirects,
+        }
+        if body is not None:
+            kwargs["json"] = body
+        elif data is not None:
+            kwargs["data"] = data
+
+        if use_session:
+            return self._request_with_retry("PUT", url, **kwargs)
+        else:
+            return requests.put(url, **kwargs)
+
+    def _post_raw(
+        self,
+        url: str,
+        body: Optional[Dict[str, Any]] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
+        trace_prefix: str = "03135",
+        trace_id: str = "",
+        timeout: int = 120,
+    ) -> requests.Response:
+        """POST 请求（返回原始响应，由调用方自行解析）
+
+        适用于需要读取响应头（如 Location）等 _post 无法满足的场景。
+        """
+        headers = self._headers()
+        if not trace_id:
+            trace_id = body.get("traceId", "") if body else ""
+        if not trace_id:
+            trace_id = _generate_traceid(trace_prefix)
+        if body is not None:
+            body["traceId"] = trace_id
+        headers["x-hw-trace-id"] = trace_id
+        if extra_headers:
+            headers.update(extra_headers)
+
+        kwargs: Dict[str, Any] = {
+            "headers": headers,
+            "timeout": timeout,
+            "verify": False,
+        }
+        if body is not None:
+            kwargs["json"] = body
+
+        resp = self._request_with_retry("POST", url, **kwargs)
+        self._sync_cookies(resp)
+        return resp
 
     def _get(
         self,

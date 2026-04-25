@@ -491,4 +491,137 @@ class NotepadModule(BaseModule):
         return {"ok": code == "0", "code": code,
                 "msg": "预签名成功" if code == "0" else f"失败({code})", "data": data}
 
+    def update_note_tags_etags(self, note_tags: list) -> Result:
+        """更新标签etags"""
+        body = {"noteTags": note_tags, "traceId": _generate_traceid("03139")}
+        data = self._post("https://cloud.huawei.com/notepad/notetag/etags", body, "03139")
+        if "error" in data:
+            return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
+        code = self._get_code(data)
+        return {"ok": code == "0", "code": code,
+                "msg": "标签etags更新成功" if code == "0" else f"失败({code})", "data": data}
+
+    def update_notes_etags(self, note_list: list, discard_list: list = []) -> Result:
+        """更新笔记etags"""
+        body = {"noteList": note_list, "discardList": discard_list, "traceId": _generate_traceid("03131")}
+        data = self._post("https://cloud.huawei.com/notepad/note/etags", body, "03131")
+        if "error" in data:
+            return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
+        code = self._get_code(data)
+        return {"ok": code == "0", "code": code,
+                "msg": "笔记etags更新成功" if code == "0" else f"失败({code})", "data": data}
+
+    def get_tags_with_guids(self, tag_guids: str) -> Result:
+        """根据tagGuids获取标签"""
+        body = {"tagGuids": tag_guids, "traceId": _generate_traceid("03135")}
+        data = self._post("https://cloud.huawei.com/notepad/notetag/query", body, "03135")
+        if "error" in data:
+            return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
+        rsp = data.get("rspInfo", {})
+        code = self._get_code(data)
+        return {"ok": code == "0", "code": code,
+                "msg": "获取标签成功" if code == "0" else f"失败({code})", "data": rsp}
+
+    def pre_upload_attachment_process(
+        self,
+        need_to_sign_url: str,
+        http_method: str = "POST",
+        generate_sign_flag: bool = True,
+        first_upload_file_flag: bool = True,
+    ) -> Result:
+        """附件上传预处理
+
+        用于生成附件上传的 URL 和签名。
+
+        Args:
+            need_to_sign_url: 需要签名的上传路径，如 ``/proxy/v1/upload/%2Fv2%2F1001%2Fnote%2Frecord%2F...``
+            http_method: HTTP 方法，默认 ``POST``
+            generate_sign_flag: 是否生成签名，默认 True
+            first_upload_file_flag: 是否首次上传，默认 True
+
+        Returns:
+            包含上传 URL 和签名的响应数据
+        """
+        body: Dict[str, Any] = {
+            "needToSignUrl": need_to_sign_url,
+            "httpMethod": http_method,
+            "generateSignFlag": generate_sign_flag,
+            "firstUploadFileFlag": first_upload_file_flag,
+        }
+        data = self._post("https://cloud.huawei.com/driveFileProxy/preUploadAttachmentProcess", body, "03133")
+        if "error" in data:
+            return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
+        code = self._get_code(data)
+        return {"ok": code == "0", "code": code,
+                "msg": "预处理成功" if code == "0" else f"失败({code})",
+                "data": {"sign": data.get("sign", ""), "dataSyncUserLock": data.get("dataSyncUserLock", ""),
+                         "upload_url": need_to_sign_url}}
+
+    def after_upload_attachment_process(self) -> Result:
+        """附件上传后处理
+
+        在文件上传到云存储完成后调用，确认上传完成。
+
+        Returns:
+            上传确认响应
+        """
+        body: Dict[str, Any] = {}
+        data = self._post("https://cloud.huawei.com/driveFileProxy/afterUploadAttachmentProcess", body, "03133")
+        if "error" in data:
+            return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
+        code = self._get_code(data)
+        return {"ok": code == "0", "code": code,
+                "msg": "上传确认成功" if code == "0" else f"失败({code})", "data": data}
+
+    def download_attachment(self, file_path: str, save_path: Optional[str] = None) -> Result:
+        """通过预签名URL下载附件
+
+        Args:
+            file_path: 文件路径，如 ``/proxy/v1/download/%2Fv2%2FdataSync%2Fcallback%2Fv1%2F1001%2Fkind%2Fnote%2Frecord%2F...``
+            save_path: 保存路径，如果为 None 则返回二进制内容
+
+        Returns:
+            下载结果，包含文件内容或保存路径
+        """
+        url = f"https://cloud.huawei.com{file_path}"
+        try:
+            resp = self._request_with_retry(
+                "GET", url, headers=self._headers(), timeout=60, verify=False,
+            )
+            self._sync_cookies(resp)
+            if resp.status_code == 200:
+                if save_path:
+                    with open(save_path, "wb") as f:
+                        f.write(resp.content)
+                    return {"ok": True, "code": "0", "msg": "下载成功",
+                            "data": {"path": save_path, "size": len(resp.content)}}
+                return {"ok": True, "code": "0", "msg": "下载成功",
+                        "data": {"content": resp.content, "content_type": resp.headers.get("Content-Type", "")}}
+            return {"ok": False, "code": str(resp.status_code), "msg": f"HTTP {resp.status_code}"}
+        except requests.RequestException as e:
+            return {"ok": False, "code": "-1", "msg": f"请求异常: {e}"}
+
+    def get_attachment_download_url(self, file_path: str) -> Result:
+        """获取附件下载URL（带签名）
+
+        用于获取附件的预签名下载 URL。
+
+        Args:
+            file_path: 文件路径
+
+        Returns:
+            预签名的下载 URL
+        """
+        body: Dict[str, Any] = {
+            "needToSignUrl": file_path,
+            "httpMethod": "GET",
+            "generateSignFlag": True,
+        }
+        data = self._post("https://cloud.huawei.com/proxyserver/driveFileProxy/preProcess", body, "03133")
+        if "error" in data:
+            return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
+        code = self._get_code(data)
+        return {"ok": code == "0", "code": code,
+                "msg": "获取下载URL成功" if code == "0" else f"失败({code})", "data": data}
+
 
