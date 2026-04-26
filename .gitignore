@@ -35,6 +35,8 @@ login/
 _/
 抓包数据/
 downloads/
+test/
+.pytest_cache/
 # IDE
 .vscode/
 .idea/
