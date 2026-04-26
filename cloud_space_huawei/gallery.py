@@ -40,7 +40,21 @@ import os
 import time
 from typing import Any, Dict, List, Optional, Union
 
-from .base import BaseModule, Result, _generate_traceid
+from .base import (
+    BaseModule,
+    LONG_TIMEOUT,
+    MEDIUM_TIMEOUT,
+    Result,
+    TRACE_GALLERY_CREATE,
+    TRACE_GALLERY_DELETE,
+    TRACE_GALLERY_INFO,
+    TRACE_GALLERY_LIST,
+    TRACE_GALLERY_PURGE,
+    TRACE_GALLERY_QUERY,
+    TRACE_GALLERY_RESTORE,
+    TRACE_GALLERY_UPLOAD,
+    _generate_traceid,
+)
 
 logger = logging.getLogger("cloud-space-huawei.gallery")
 
@@ -97,7 +111,7 @@ class GalleryModule(BaseModule):
         """
         url = f"{ALBUM_URL}/galleryStatInfo"
         body: Dict[str, Any] = {"needRefresh": need_refresh}
-        data = self._post(url, body, trace_prefix="04113")
+        data = self._post(url, body, trace_prefix=TRACE_GALLERY_QUERY)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = str(data.get("code", ""))
@@ -122,7 +136,7 @@ class GalleryModule(BaseModule):
         """
         url = f"{ALBUM_URL}/galleryDateStatInfo"
         body: Dict[str, Any] = {"type": stat_type}
-        data = self._post(url, body, trace_prefix="04113")
+        data = self._post(url, body, trace_prefix=TRACE_GALLERY_QUERY)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = str(data.get("code", ""))
@@ -142,7 +156,7 @@ class GalleryModule(BaseModule):
         """
         url = f"{ALBUM_URL}/galleryAlbumStatInfo"
         body: Dict[str, Any] = {"albumList": album_ids}
-        data = self._post(url, body, trace_prefix="04101")
+        data = self._post(url, body, trace_prefix=TRACE_GALLERY_INFO)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = str(data.get("code", ""))
@@ -157,10 +171,10 @@ class GalleryModule(BaseModule):
         Returns:
             包含 cloudVersion, status, remain, deleteTime, disableTime
         """
-        trace_id = _generate_traceid("04101")
+        trace_id = _generate_traceid(TRACE_GALLERY_INFO)
         url = f"{ALBUM_URL}/queryAlbumStatus?traceId={trace_id}"
         body: Dict[str, Any] = {"traceId": trace_id}
-        data = self._post(url, body, trace_prefix="04101")
+        data = self._post(url, body, trace_prefix=TRACE_GALLERY_INFO)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = str(data.get("code", ""))
@@ -180,10 +194,10 @@ class GalleryModule(BaseModule):
         Returns:
             包含 serverTime (毫秒时间戳)
         """
-        trace_id = _generate_traceid("04101")
+        trace_id = _generate_traceid(TRACE_GALLERY_INFO)
         url = f"{ALBUM_URL}/getTime?traceId={trace_id}"
         body: Dict[str, Any] = {"traceId": trace_id}
-        data = self._post(url, body, trace_prefix="04101")
+        data = self._post(url, body, trace_prefix=TRACE_GALLERY_INFO)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = str(data.get("code", ""))
@@ -204,7 +218,7 @@ class GalleryModule(BaseModule):
         """
         url = f"{ALBUM_URL}/queryAlbumInfo"
         body: Dict[str, Any] = {"isHash": False, "language": language}
-        data = self._post(url, body, trace_prefix="04113")
+        data = self._post(url, body, trace_prefix=TRACE_GALLERY_QUERY)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = str(data.get("code", ""))
@@ -228,7 +242,7 @@ class GalleryModule(BaseModule):
         """
         url = f"{ALBUM_URL}/createAlbum"
         body: Dict[str, Any] = {"albumName": album_name, "albumType": album_type}
-        data = self._post(url, body, trace_prefix="04100")
+        data = self._post(url, body, trace_prefix=TRACE_GALLERY_CREATE)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = str(data.get("code", ""))
@@ -272,7 +286,7 @@ class GalleryModule(BaseModule):
             "count": count,
             "type": file_type,
         }
-        data = self._post(url, body, trace_prefix="04118")
+        data = self._post(url, body, trace_prefix=TRACE_GALLERY_LIST)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         # getSimpleFile 使用 resultCode
@@ -318,7 +332,7 @@ class GalleryModule(BaseModule):
             "thumbHeight": thumb_height,
             "thumbWidth": thumb_width,
         }
-        data = self._post(url, body, trace_prefix="04101")
+        data = self._post(url, body, trace_prefix=TRACE_GALLERY_INFO)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = str(data.get("code", ""))
@@ -352,7 +366,7 @@ class GalleryModule(BaseModule):
             "thumbWidth": thumb_width,
             "thumbType": thumb_type,
         }
-        data = self._post(url, body, trace_prefix="04101")
+        data = self._post(url, body, trace_prefix=TRACE_GALLERY_INFO)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = str(data.get("code", ""))
@@ -391,7 +405,7 @@ class GalleryModule(BaseModule):
             },
             "fileList": files,
         }
-        data = self._post(url, body, trace_prefix="04101")
+        data = self._post(url, body, trace_prefix=TRACE_GALLERY_INFO)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = str(data.get("code", ""))
@@ -419,7 +433,7 @@ class GalleryModule(BaseModule):
             "fileList": files,
             "ownerId": owner_id,
         }
-        data = self._post(url, body, trace_prefix="04101")
+        data = self._post(url, body, trace_prefix=TRACE_GALLERY_INFO)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = str(data.get("code", ""))
@@ -453,7 +467,7 @@ class GalleryModule(BaseModule):
             "hash": [""],
             "uniqueId": unique_ids,
         }
-        data = self._post(url, body, trace_prefix="04102")
+        data = self._post(url, body, trace_prefix=TRACE_GALLERY_DELETE)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = str(data.get("code", ""))
@@ -488,7 +502,7 @@ class GalleryModule(BaseModule):
             "destAlbumId": dest_album_id,
             "sourcePath": source_path,
         }
-        data = self._post(url, body, trace_prefix="04100")
+        data = self._post(url, body, trace_prefix=TRACE_GALLERY_CREATE)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = str(data.get("code", ""))
@@ -523,7 +537,7 @@ class GalleryModule(BaseModule):
             "albumId": album_id,
             "favorite": favorite,
         }
-        data = self._post(url, body, trace_prefix="04100")
+        data = self._post(url, body, trace_prefix=TRACE_GALLERY_CREATE)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = str(data.get("code", ""))
@@ -545,7 +559,7 @@ class GalleryModule(BaseModule):
         """
         url = f"{ALBUM_URL}/restoreRecycleFiles"
         body: Dict[str, Any] = {"uniqueId": unique_ids}
-        data = self._post(url, body, trace_prefix="04108")
+        data = self._post(url, body, trace_prefix=TRACE_GALLERY_RESTORE)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = str(data.get("code", ""))
@@ -576,7 +590,7 @@ class GalleryModule(BaseModule):
             "hash": [""],
             "uniqueId": unique_ids,
         }
-        data = self._post(url, body, trace_prefix="04106")
+        data = self._post(url, body, trace_prefix=TRACE_GALLERY_PURGE)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = str(data.get("code", ""))
@@ -603,13 +617,13 @@ class GalleryModule(BaseModule):
         """
         # 1. 调用 queryShare
         url = f"{ALBUM_URL}/queryShare"
-        trace_id = _generate_traceid("04113")
+        trace_id = _generate_traceid(TRACE_GALLERY_QUERY)
         body: Dict[str, Any] = {
             "resource": resource,
             "flag": flag,
             "traceId": trace_id,
         }
-        data = self._post(url, body, trace_prefix="04113")
+        data = self._post(url, body, trace_prefix=TRACE_GALLERY_QUERY)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = str(data.get("code", ""))
@@ -648,10 +662,10 @@ class GalleryModule(BaseModule):
         Returns:
             包含 ownGroupShareList, recGroupShareList
         """
-        trace_id = _generate_traceid("04113")
+        trace_id = _generate_traceid(TRACE_GALLERY_QUERY)
         url = f"{ALBUM_URL}/queryGroupShare?traceId={trace_id}"
         body: Dict[str, Any] = {}
-        data = self._post(url, body, trace_prefix="04113")
+        data = self._post(url, body, trace_prefix=TRACE_GALLERY_QUERY)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = str(data.get("code", ""))
@@ -699,7 +713,7 @@ class GalleryModule(BaseModule):
         content_type = "image/jpeg" if file_type == FILE_TYPE_IMAGE else "video/mp4"
 
         # 整个上传流程使用同一个 trace_id
-        upload_trace_id = _generate_traceid("04104")
+        upload_trace_id = _generate_traceid(TRACE_GALLERY_UPLOAD)
 
         # Step 1a: preUploadAlbumProcess — 获取 lock
         pre1 = self._pre_upload_album_process(
@@ -781,7 +795,7 @@ class GalleryModule(BaseModule):
             "generateSignFlag": generate_sign_flag,
             "firstUploadFileFlag": first_upload_file_flag,
         }
-        data = self._post(url, body, trace_prefix="04104")
+        data = self._post(url, body, trace_prefix=TRACE_GALLERY_UPLOAD)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = str(data.get("code", ""))
@@ -852,12 +866,15 @@ class GalleryModule(BaseModule):
         if signature:
             extra_headers["x-hw-signature"] = signature
 
-        # 构建 multipart/form-data
+        # 构建 multipart/form-data（文件内容一次性读取用于 multipart 构造）
         try:
             with open(file_path, "rb") as f:
                 file_data = f.read()
         except OSError as e:
             return {"ok": False, "code": "-1", "msg": f"读取文件失败: {e}"}
+
+        # 警告：multipart body 需预构造在内存中，无法真正流式上传
+        # 文件读取已在 _compute_md5 中使用分块，小文件无额外内存问题
 
         # 手动构建 multipart body
         boundary = "----PythonFormBoundary" + hashlib.md5(
@@ -879,14 +896,14 @@ class GalleryModule(BaseModule):
         try:
             headers = self._headers()
             if not trace_id:
-                trace_id = _generate_traceid("04104")
+                trace_id = _generate_traceid(TRACE_GALLERY_UPLOAD)
             headers["x-hw-trace-id"] = trace_id
             headers.update(extra_headers)
 
             resp = self._request_with_retry(
                 "POST", upload_url,
                 headers=headers, data=multipart_body,
-                timeout=300, verify=False,
+                timeout=LONG_TIMEOUT, verify=False,
             )
             self._sync_cookies(resp)
 
@@ -917,7 +934,7 @@ class GalleryModule(BaseModule):
         """图库上传后处理"""
         url = f"{DRIVE_PROXY_URL}/afterUploadAlbumProcess"
         body: Dict[str, Any] = {}
-        data = self._post(url, body, trace_prefix="04101")
+        data = self._post(url, body, trace_prefix=TRACE_GALLERY_INFO)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = str(data.get("code", ""))
@@ -950,9 +967,9 @@ class GalleryModule(BaseModule):
                 "fileType": file_type,  # MIME 类型字符串
                 "createTime": create_time,
             },
-            "traceId": trace_id or _generate_traceid("04104"),
+            "traceId": trace_id or _generate_traceid(TRACE_GALLERY_UPLOAD),
         }
-        data = self._post(url, body, trace_prefix="04104")
+        data = self._post(url, body, trace_prefix=TRACE_GALLERY_UPLOAD)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = str(data.get("code", ""))
@@ -983,7 +1000,7 @@ class GalleryModule(BaseModule):
         """
         try:
             resp = self._request_with_retry(
-                "GET", file_url, headers=self._headers(), timeout=120, verify=False,
+                "GET", file_url, headers=self._headers(), timeout=MEDIUM_TIMEOUT, verify=False,
             )
             self._sync_cookies(resp)
             if resp.status_code == 200:

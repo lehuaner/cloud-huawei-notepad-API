@@ -26,11 +26,15 @@ classifiers = [
 ]
 dependencies = [
     "requests>=2.28",
+    "urllib3>=1.26",
 ]
 
 [project.optional-dependencies]
 image = [
     "Pillow>=9.0",
+]
+fingerprint = [
+    "playwright>=1.40",
 ]
 dev = [
     "pytest>=7.0",
@@ -42,6 +46,11 @@ testpaths = ["test"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "-v -s --tb=short"
+markers = [
+    "integration: 集成测试（需要真实网络请求）",
+    "slow: 慢速测试",
+    "performance: 性能测试",
+]
 
 [tool.setuptools.packages.find]
 include = ["cloud_space_huawei*"]

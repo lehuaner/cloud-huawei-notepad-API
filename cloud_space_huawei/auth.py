@@ -37,6 +37,12 @@ from typing import Any, Dict, List, Optional
 import requests
 import urllib3
 
+from .fingerprint import (
+    get_fingerprint as _get_real_fingerprint,
+    clear_cache as _clear_fingerprint_cache,
+    save_fingerprint as _save_fingerprint,
+)
+
 logger = logging.getLogger(__name__)
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -48,35 +54,26 @@ def _sha1_hex(data: str) -> str:
     return hashlib.sha1(data.encode('utf-8')).hexdigest()
 
 
+# 设备指纹在同一次登录会话中保持一致（服务端可能验证指纹一致性）
+_fp_cache: Optional[str] = None
+
+
 def _generate_fp() -> str:
-    """生成设备指纹 (与前端 JS 逻辑一致)"""
-    fingerprint = {
-        'canvas': _sha1_hex('canvas_fingerprint_placeholder_chrome_windows'),
-        'webgl': _sha1_hex('webgl_fingerprint_placeholder_angle_intel'),
-        'epl': '5',
-        'ep': _sha1_hex('PDF Viewer,Chrome PDF Viewer,Chromium PDF Viewer,Microsoft Edge PDF Viewer,WebKit built-in PDF'),
-        'epls': 'C' + _sha1_hex('Chrome PDF Plugin,Chrome PDF Viewer,Portable Document Format'),
-        'fonts': _sha1_hex('Arial,Courier New,Georgia,Impact,Times New Roman,Verdana'),
-        'nacn': 'Mozilla', 'nan': 'Netscape', 'nce': 'true', 'nlg': 'zh-CN',
-        'npf': 'Win32', 'sah': '1040', 'saw': '1920', 'sh': '1080', 'sw': '1920',
-        'bsh': '0', 'bsw': '0', 'ett': str(int(time.time() * 1000)), 'etz': '-480',
-    }
-    parts = []
-    for key in sorted(fingerprint.keys()):
-        val = fingerprint[key]
-        if val:
-            parts.append(f'{urllib.parse.quote(key, safe="")}={urllib.parse.quote(str(val), safe="")}')
-    serialized = '&'.join(parts)
-    checksum = _sha1_hex(serialized)
-    data_with_cs = serialized + '&cs=' + checksum
-    xor_key = 211
-    encrypted_chars = []
-    for ch in data_with_cs:
-        encrypted_byte = (ord(ch) ^ (xor_key - 1)) & 0xFF
-        encrypted_chars.append(chr(encrypted_byte))
-        xor_key = encrypted_byte
-    encrypted = ''.join(encrypted_chars)
-    return base64.b64encode(encrypted.encode('latin-1')).decode('ascii')
+    """生成设备指纹 (使用 Playwright 获取真实浏览器指纹)
+
+    通过 Playwright 启动 headless Chrome 获取真实的 canvas/webgl 指纹，
+    确保与华为服务器验证逻辑一致。
+    指纹值在同一次进程内缓存，保证同一会话内所有请求使用相同指纹。
+    """
+    global _fp_cache
+    if _fp_cache is not None:
+        return _fp_cache
+
+    # 使用 Playwright 获取真实指纹（会启动 headless Chrome）
+    logger.info("[指纹] 正在通过 Playwright 获取真实浏览器指纹...")
+    _fp_cache = _get_real_fingerprint()
+    logger.info(f"[指纹] 指纹获取成功: {_fp_cache[:30]}...")
+    return _fp_cache
 
 
 # ===================== 数据类 =====================
@@ -357,7 +354,11 @@ class AuthManager:
 
         callback_url = auth_result.get('callbackURL', '')
         if callback_url:
-            return self._finish_oauth(callback_url)
+            result = self._finish_oauth(callback_url)
+            # 登录成功（设备已认证），保存指纹
+            if result.success and not result.need_verify:
+                _save_fingerprint(_fp_cache)
+            return result
 
         # 如果没有 callbackURL，回退到直接返回当前 cookies
         cookies = self._get_cookies_dict()
@@ -480,6 +481,39 @@ class AuthManager:
             },
         )
 
+    def _get_image_verify_code(self) -> Optional[str]:
+        """获取图片验证码
+
+        从服务器获取图片验证码，返回验证码ID（用于提交）和图片数据（用于显示）。
+
+        Returns:
+            tuple: (verify_id, image_data) 或 None
+        """
+        try:
+            # 先请求获取验证码ID和图片
+            resp = self.session.get(
+                f'https://id1.cloud.huawei.com/CAS/IDM_W/ajaxHandler/getVerifyImage'
+                f'?pageToken={self._page_token}&pageTokenKey={self._page_token_key}'
+                f'&reqClientType={_REQ_CLIENT_TYPE}&loginChannel={_LOGIN_CHANNEL}'
+                f'&clientID={_CLIENT_ID}&lang={_LANG}&v=1',
+                headers={'Referer': 'https://id1.cloud.huawei.com/CAS/portal/cloudIframeLogin.html'},
+                timeout=30,
+            )
+            if resp.status_code != 200:
+                return None
+
+            result = resp.json()
+            verify_id = result.get('verifyId', '')
+            image_base64 = result.get('img', '')
+
+            if not verify_id or not image_base64:
+                return None
+
+            return verify_id, image_base64
+        except Exception as e:
+            logger.warning("获取图片验证码失败: %s", e)
+            return None
+
     def _step_risk(self) -> Optional[LoginResult]:
         resp = self._post_form(
             'https://id1.cloud.huawei.com/CAS/IDM_W/ajaxHandler/chkRisk',
@@ -510,21 +544,52 @@ class AuthManager:
             'extInfo': self._ext_info,
         }
 
-        is_need_image_code = 0
-        # 图片验证码处理 (需要时)
-        # if is_need_image_code == 1: ...
-
         resp = self._post_form(
             'https://id1.cloud.huawei.com/CAS/IDM_W/ajaxHandler/remoteLogin', login_data,
         )
         login_result = resp.json()
 
-        # 验证码错误重试
+        # 图片验证码错误重试 (errorCode == '10000201')
         retry_count = 0
         while login_result.get('errorCode') == '10000201' and retry_count < 3:
             retry_count += 1
-            # TODO: 图片验证码重试逻辑
-            break
+            logger.info("图片验证码错误，第 %d 次重试", retry_count)
+
+            # 获取新的图片验证码
+            verify_info = self._get_image_verify_code()
+            if not verify_info:
+                logger.warning("获取图片验证码失败，跳过重试")
+                break
+
+            verify_id, image_base64 = verify_info
+
+            # 保存图片验证码到临时文件供用户查看
+            try:
+                import base64
+                image_data = base64.b64decode(image_base64)
+                image_path = os.path.join(os.path.expanduser("~"), "huawei_verify_code.png")
+                with open(image_path, 'wb') as f:
+                    f.write(image_data)
+                logger.info("图片验证码已保存到: %s", image_path)
+                print(f"\n需要输入图片验证码")
+                print(f"验证码图片已保存到: {image_path}")
+                print(f"请打开图片查看验证码，输入后回车继续（或输入 'q' 退出）:")
+            except Exception as e:
+                logger.warning("保存验证码图片失败: %s", e)
+                print(f"\n需要输入图片验证码（base64长度: {len(image_base64)}）:")
+
+            # 提示用户输入验证码
+            user_input = input("请输入图片验证码: ").strip()
+            if user_input.lower() == 'q':
+                return LoginResult(False, error='用户取消')
+
+            # 重试登录，携带新的验证码
+            login_data['verifyCode'] = user_input
+            login_data['verifyId'] = verify_id
+            resp = self._post_form(
+                'https://id1.cloud.huawei.com/CAS/IDM_W/ajaxHandler/remoteLogin', login_data,
+            )
+            login_result = resp.json()
 
         if login_result.get('isSuccess') != 1:
             return LoginResult(False, error='密码登录失败', detail=login_result)
@@ -778,6 +843,8 @@ class AuthManager:
         self._fetch_csrf_via_heartbeat()
 
         cookies = self._get_cookies_dict()
+        # 登录成功（cookie 仍有效），保存指纹
+        _save_fingerprint(_fp_cache)
         return LoginResult(
             success=True,
             need_verify=False,
@@ -1038,5 +1105,10 @@ class AuthManager:
                 # cloud.huawei.com 域的 cookies
                 self.session.cookies.set(name, value, domain='cloud.huawei.com')
             else:
-                # 其他 cookie（如分析追踪类）设置到 .huawei.com
-                self.session.cookies.set(name, value, domain='.huawei.com')
+                # 未知 cookie：不盲设 domain，记录警告，仅在值有效时设置
+                logger.warning(
+                    '未知 cookie "%s" 被忽略，无法确定正确的域。'
+                    '已知域: cloud.huawei.com / .id1.cloud.huawei.com / .huawei.com。'
+                    '如为有效 cookie，请更新 _CLOUD_HUAWEI_COM_COOKIE_KEYS 等常量。',
+                    name,
+                )

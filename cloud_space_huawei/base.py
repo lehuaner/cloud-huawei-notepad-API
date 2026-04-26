@@ -16,6 +16,39 @@ logger = logging.getLogger("cloud-space-huawei")
 
 Result = Dict[str, Any]
 
+# ===================== HTTP 常量 =====================
+
+DEFAULT_TIMEOUT = 30  # 常规请求超时（秒）
+LONG_TIMEOUT = 300     # 大文件上传/下载超时（秒）
+MEDIUM_TIMEOUT = 120   # 中等大小请求超时（秒）
+
+# ===================== Trace ID 前缀（API 操作类型标识）=====================
+# drive 模块
+TRACE_QUERY_FILE = "19016"   # 查询文件列表
+TRACE_CREATE_FILE = "19013"  # 创建文件/文件夹
+TRACE_DELETE_FILE = "05007"   # 删除文件
+TRACE_RESTORE_FILE = "19022"  # 恢复文件
+TRACE_MOVE_FILE = "19021"     # 移动文件
+TRACE_RENAME_FILE = "05005"   # 重命名文件
+TRACE_UPLOAD_FILE = "19007"   # 上传文件
+TRACE_DOWNLOAD_FILE = "03133" # 下载文件
+TRACE_NOTIFY_SYNC = "19015"   # 同步通知
+# gallery 模块
+TRACE_GALLERY_QUERY = "04113"   # 查询相册/文件
+TRACE_GALLERY_INFO = "04101"     # 获取相册信息
+TRACE_GALLERY_LIST = "04118"     # 获取文件列表
+TRACE_GALLERY_CREATE = "04100"   # 创建相册
+TRACE_GALLERY_DELETE = "04102"   # 删除相册文件
+TRACE_GALLERY_RESTORE = "04108"  # 恢复回收站
+TRACE_GALLERY_PURGE = "04106"   # 永久删除
+TRACE_GALLERY_UPLOAD = "04104"  # 上传文件
+# 通用
+TRACE_PORTAL = "00001"  # 门户级 API
+TRACE_SPACE = "07102"   # 空间信息
+TRACE_HEARTBEAT = "07100"  # 心跳检测
+TRACE_LOGOUT = "25002"  # 登出
+TRACE_COOKIE = "25001"  # Cookie 操作
+
 
 class BaseModule:
     """所有子模块的基类，提供公共的 HTTP 请求能力"""
@@ -57,6 +90,7 @@ class BaseModule:
             "x-hw-device-id": self._device_id,
             "x-hw-device-manufacturer": "HUAWEI",
             "x-hw-device-type": "7",
+            "x-hw-framework-type": "0",  # 抓包验证：响铃必需
             "x-hw-os-brand": "Web",
             "referer": "https://cloud.huawei.com/home",
             "origin": "https://cloud.huawei.com",
@@ -69,6 +103,17 @@ class BaseModule:
         if "code" in data:
             return str(data["code"])
         return str(data.get("Result", {}).get("code", ""))
+
+    @staticmethod
+    def _check_auth_error(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """检查响应体中的认证错误，返回错误结果字典或 None（表示无错误）"""
+        code = str(data.get("code", ""))
+        if code == "402":
+            return {"error": "设备未认证(402)，请先完成设备信任认证", "_code": "402"}
+        result_code = str(data.get("Result", {}).get("code", ""))
+        if result_code == "402":
+            return {"error": "设备未认证(402)，请先完成设备信任认证", "_code": "402"}
+        return None
 
     def _update_start_cursor(self, data: Dict[str, Any]) -> None:
         cursor = data.get("startCursor", "")
@@ -96,6 +141,7 @@ class BaseModule:
                 logger.warning("请求失败 (第%d/%d次): %s", attempt, self._max_retries, e)
                 if attempt < self._max_retries:
                     time.sleep(self._retry_delay * attempt)
+        assert last_exc is not None, "No exception captured"
         raise last_exc  # type: ignore[misc]
 
     def _post(
@@ -116,13 +162,9 @@ class BaseModule:
             self._sync_cookies(resp)
             if resp.status_code == 200:
                 data = resp.json()
-                # 检查响应体中的 402 code（未认证设备）
-                code = str(data.get("code", ""))
-                if code == "402":
-                    return {"error": "设备未认证(402)，请先完成设备信任认证", "_code": "402"}
-                result_code = str(data.get("Result", {}).get("code", ""))
-                if result_code == "402":
-                    return {"error": "设备未认证(402)，请先完成设备信任认证", "_code": "402"}
+                auth_err = self._check_auth_error(data)
+                if auth_err:
+                    return auth_err
                 return data
             if resp.status_code == 401:
                 return {"error": "认证失败(401)，cookies 已过期", "_code": "401"}
@@ -233,13 +275,9 @@ class BaseModule:
             self._sync_cookies(resp)
             if resp.status_code == 200:
                 data = resp.json()
-                # 检查响应体中的 402 code（未认证设备）
-                code = str(data.get("code", ""))
-                if code == "402":
-                    return {"error": "设备未认证(402)，请先完成设备信任认证", "_code": "402"}
-                result_code = str(data.get("Result", {}).get("code", ""))
-                if result_code == "402":
-                    return {"error": "设备未认证(402)，请先完成设备信任认证", "_code": "402"}
+                auth_err = self._check_auth_error(data)
+                if auth_err:
+                    return auth_err
                 return data
             if resp.status_code == 401:
                 return {"error": "认证失败(401)，cookies 已过期", "_code": "401"}

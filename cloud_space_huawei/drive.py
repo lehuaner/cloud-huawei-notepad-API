@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import mimetypes
@@ -9,7 +10,22 @@ import os
 import time
 from typing import Any, Dict, List, Optional, Union
 
-from .base import BaseModule, Result, _generate_traceid
+from .base import (
+    BaseModule,
+    LONG_TIMEOUT,
+    MEDIUM_TIMEOUT,
+    Result,
+    TRACE_CREATE_FILE,
+    TRACE_DELETE_FILE,
+    TRACE_DOWNLOAD_FILE,
+    TRACE_MOVE_FILE,
+    TRACE_NOTIFY_SYNC,
+    TRACE_QUERY_FILE,
+    TRACE_RENAME_FILE,
+    TRACE_RESTORE_FILE,
+    TRACE_UPLOAD_FILE,
+    _generate_traceid,
+)
 
 logger = logging.getLogger("cloud-space-huawei.drive")
 
@@ -47,13 +63,13 @@ class DriveModule(BaseModule):
             - serverTime: 服务器时间
         """
         body: Dict[str, Any] = {
-            "traceId": _generate_traceid("19016"),
+            "traceId": _generate_traceid(TRACE_QUERY_FILE),
             "id": folder_id or "root",
             "order": order,
             "cursor": cursor,
             "folderFlag": folder_flag,
         }
-        data = self._post("https://cloud.huawei.com/syncDrive/queryDriveFile", body, "19016")
+        data = self._post("https://cloud.huawei.com/syncDrive/queryDriveFile", body, TRACE_QUERY_FILE)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = self._get_code(data)
@@ -82,7 +98,7 @@ class DriveModule(BaseModule):
             创建的文件夹信息
         """
         body: Dict[str, Any] = {
-            "traceId": _generate_traceid("19013"),
+            "traceId": _generate_traceid(TRACE_CREATE_FILE),
             "files": {
                 "type": "application/vnd.huawei-apps.folder",
                 "name": name,
@@ -90,7 +106,7 @@ class DriveModule(BaseModule):
             "parentFolder": parent_id,
             "showInRecentListFlag": True,
         }
-        data = self._post("https://cloud.huawei.com/syncDrive/mkDriveFile", body, "19013")
+        data = self._post("https://cloud.huawei.com/syncDrive/mkDriveFile", body, TRACE_CREATE_FILE)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = self._get_code(data)
@@ -120,12 +136,12 @@ class DriveModule(BaseModule):
             删除结果
         """
         body: Dict[str, Any] = {
-            "traceId": _generate_traceid("05007"),
+            "traceId": _generate_traceid(TRACE_DELETE_FILE),
             "delType": del_type,
             "srcPath": src_path,
             "fileList": file_ids,
         }
-        data = self._post("https://cloud.huawei.com/syncDrive/delDriveFile", body, "05007")
+        data = self._post("https://cloud.huawei.com/syncDrive/delDriveFile", body, TRACE_DELETE_FILE)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = self._get_code(data)
@@ -156,11 +172,11 @@ class DriveModule(BaseModule):
             恢复结果
         """
         body: Dict[str, Any] = {
-            "traceId": _generate_traceid("19022"),
+            "traceId": _generate_traceid(TRACE_RESTORE_FILE),
             "fileIdList": file_ids,
             "cursor": cursor,
         }
-        data = self._post("https://cloud.huawei.com/syncDrive/restoreDriveFile", body, "19022")
+        data = self._post("https://cloud.huawei.com/syncDrive/restoreDriveFile", body, TRACE_RESTORE_FILE)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = self._get_code(data)
@@ -193,11 +209,11 @@ class DriveModule(BaseModule):
             移动结果
         """
         body: Dict[str, Any] = {
-            "traceId": _generate_traceid("19021"),
+            "traceId": _generate_traceid(TRACE_MOVE_FILE),
             "fileIdList": file_ids,
             "destId": dest_folder_id,
         }
-        data = self._post("https://cloud.huawei.com/syncDrive/moveDriveFile", body, "19021")
+        data = self._post("https://cloud.huawei.com/syncDrive/moveDriveFile", body, TRACE_MOVE_FILE)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = self._get_code(data)
@@ -228,11 +244,11 @@ class DriveModule(BaseModule):
             重命名后的文件信息
         """
         body: Dict[str, Any] = {
-            "traceId": _generate_traceid("05005"),
+            "traceId": _generate_traceid(TRACE_RENAME_FILE),
             "fileId": file_id,
             "name": new_name,
         }
-        data = self._post("https://cloud.huawei.com/syncDrive/renameDriveFile", body, "05005")
+        data = self._post("https://cloud.huawei.com/syncDrive/renameDriveFile", body, TRACE_RENAME_FILE)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = self._get_code(data)
@@ -255,13 +271,13 @@ class DriveModule(BaseModule):
         """
         # 从根目录开始查询文件列表
         body: Dict[str, Any] = {
-            "traceId": _generate_traceid("19016"),
+            "traceId": _generate_traceid(TRACE_QUERY_FILE),
             "id": "root",
             "order": "editedTime desc",
             "cursor": "",
             "folderFlag": 3,
         }
-        data = self._post("https://cloud.huawei.com/syncDrive/queryDriveFile", body, "19016")
+        data = self._post("https://cloud.huawei.com/syncDrive/queryDriveFile", body, TRACE_QUERY_FILE)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
 
@@ -295,13 +311,13 @@ class DriveModule(BaseModule):
             return {"ok": False, "code": "404", "msg": "搜索深度超限", "data": {}}
 
         body: Dict[str, Any] = {
-            "traceId": _generate_traceid("19016"),
+            "traceId": _generate_traceid(TRACE_QUERY_FILE),
             "id": folder_id,
             "order": "editedTime desc",
             "cursor": "",
             "folderFlag": 3,
         }
-        data = self._post("https://cloud.huawei.com/syncDrive/queryDriveFile", body, "19016")
+        data = self._post("https://cloud.huawei.com/syncDrive/queryDriveFile", body, TRACE_QUERY_FILE)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
 
@@ -343,7 +359,7 @@ class DriveModule(BaseModule):
             "httpMethod": http_method,
             "generateSignFlag": True,
         }
-        data = self._post("https://cloud.huawei.com/proxyserver/driveFileProxy/preProcess", body, "19007")
+        data = self._post("https://cloud.huawei.com/proxyserver/driveFileProxy/preProcess", body, TRACE_UPLOAD_FILE)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = self._get_code(data)
@@ -387,13 +403,17 @@ class DriveModule(BaseModule):
         file_name = os.path.basename(file_path)
         mime_type = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
 
-        # 获取文件sha256
+        # 获取文件sha256（分块读取避免大文件 OOM）
         try:
-            import hashlib
+            sha256 = self._compute_sha256(file_path)
+        except Exception as e:
+            return {"ok": False, "code": "-1", "msg": f"读取文件失败: {e}"}
+
+        # 读取文件内容用于上传（multipart 构造需要完整字节）
+        try:
             with open(file_path, "rb") as f:
                 file_bytes = f.read()
-                sha256 = hashlib.sha256(file_bytes).hexdigest()
-        except Exception as e:
+        except OSError as e:
             return {"ok": False, "code": "-1", "msg": f"读取文件失败: {e}"}
 
         # 1. 预处理获取签名
@@ -444,7 +464,7 @@ class DriveModule(BaseModule):
 
         headers = {
             **self._headers(),
-            "x-hw-trace-id": _generate_traceid("19007"),
+            "x-hw-trace-id": _generate_traceid(TRACE_UPLOAD_FILE),
             "x-hw-signature": sign,
             "x-hw-properties": hw_properties,
             "x-hw-device-type": "7",
@@ -454,7 +474,7 @@ class DriveModule(BaseModule):
 
         try:
             resp = self._request_with_retry(
-                "POST", url, headers=headers, data=multipart_body, timeout=120, verify=False,
+                "POST", url, headers=headers, data=multipart_body, timeout=MEDIUM_TIMEOUT, verify=False,
             )
             self._sync_cookies(resp)
             logger.debug(f"上传响应状态码: {resp.status_code}")
@@ -496,9 +516,9 @@ class DriveModule(BaseModule):
     def _notify_sync(self) -> Result:
         """通知同步"""
         body: Dict[str, Any] = {
-            "traceId": _generate_traceid("19015"),
+            "traceId": _generate_traceid(TRACE_NOTIFY_SYNC),
         }
-        data = self._post("https://cloud.huawei.com/syncDrive/notifySyncDrive", body, "19015")
+        data = self._post("https://cloud.huawei.com/syncDrive/notifySyncDrive", body, TRACE_NOTIFY_SYNC)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = self._get_code(data)
@@ -524,7 +544,7 @@ class DriveModule(BaseModule):
             "httpMethod": "GET",
             "generateSignFlag": True,
         }
-        data = self._post("https://cloud.huawei.com/proxyserver/driveFileProxy/preProcess", body, "03133")
+        data = self._post("https://cloud.huawei.com/proxyserver/driveFileProxy/preProcess", body, TRACE_DOWNLOAD_FILE)
         if "error" in data:
             return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
         code = self._get_code(data)
@@ -602,7 +622,7 @@ class DriveModule(BaseModule):
         # 2. 下载文件
         try:
             resp = self._request_with_retry(
-                "GET", content_link, headers=self._headers(), timeout=300, verify=False,
+                "GET", content_link, headers=self._headers(), timeout=LONG_TIMEOUT, verify=False,
             )
             self._sync_cookies(resp)
 
@@ -760,7 +780,23 @@ class DriveModule(BaseModule):
         """
         return self.restore_files(file_ids)
 
-    def batch_rename(self, rename_info: List[Dict[str, str]]) -> Result:
+    # ---------- 工具方法 ----------
+
+    @staticmethod
+    def _compute_sha256(file_path: str, chunk_size: int = 8192) -> str:
+        """分块计算文件 SHA256（避免大文件 OOM）"""
+        h = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                h.update(chunk)
+        return h.hexdigest()
+
+    # ---------- 批量操作 API ----------
+
+    def batch_rename(self, rename_info: List[Dict[str, Any]]) -> Result:
         """批量重命名文件
 
         Args:

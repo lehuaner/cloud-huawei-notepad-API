@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import random
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
+
+import requests
 
 from .base import BaseModule, Result, _generate_traceid
 
@@ -22,6 +25,11 @@ def _generate_new_note_guid() -> str:
 
 def _generate_version_hex() -> str:
     return ''.join(random.choices('0123456789abcdef', k=4))
+
+
+def _escape_html(text: str) -> str:
+    """转义 HTML 特殊字符，防止 XSS"""
+    return html.escape(text, quote=True)
 
 
 class NotepadModule(BaseModule):
@@ -306,16 +314,16 @@ class NotepadModule(BaseModule):
             "filedir": "", "delete_flag": 0, "fold_id": 0, "is_lunar": 0,
             "need_reminded": 0, "prefix_uuid": "", "unstruct_uuid": "",
             "created": now_ms, "data6": "0",
-            "data5": json.dumps({"data1": title, "data2": "edit", "data4": "1"}, ensure_ascii=False),
-            "content": f"Text|{content_text}",
+            "data5": json.dumps({"data1": _escape_html(title), "data2": "edit", "data4": "1"}, ensure_ascii=False),
+            "content": f"Text|{_escape_html(content_text)}",
             "html_content": (
-                f'<note><element type="Text"><hw_font size ="1.0">{title}</hw_font></element>'
-                f'<element type="Text">{content_text}</element></note>'
+                f'<note><element type="Text"><hw_font size ="1.0">{_escape_html(title)}</hw_font></element>'
+                f'<element type="Text">{_escape_html(content_text)}</element></note>'
             ),
             "tag_id": tag_id, "modified": now_ms, "unstructure": "[]",
             "first_attach_name": "", "remind_id": "",
             "favorite": 0, "has_attachment": 0, "has_todo": 0,
-            "version": "12", "title": f"{title}\n{content_text}", "data3": "",
+            "version": "12", "title": f"{_escape_html(title)}\n{_escape_html(content_text)}", "data3": "",
         }
 
         inner_data = json.dumps({
@@ -360,7 +368,7 @@ class NotepadModule(BaseModule):
     def update_note(
         self,
         guid: str,
-        etag: Union[str, int],
+        etag: str | int,
         title: str,
         content_text: str,
         tag_id: str = "",
@@ -373,16 +381,16 @@ class NotepadModule(BaseModule):
             "filedir": "", "delete_flag": 0, "fold_id": 0, "is_lunar": 0,
             "need_reminded": 0, "prefix_uuid": guid[:36] if guid else "",
             "unstruct_uuid": "", "created": created_time or now_ms, "data6": "0",
-            "data5": json.dumps({"data1": title, "data2": "edit", "data4": "1"}, ensure_ascii=False),
-            "content": f"Text|{content_text}",
+            "data5": json.dumps({"data1": _escape_html(title), "data2": "edit", "data4": "1"}, ensure_ascii=False),
+            "content": f"Text|{_escape_html(content_text)}",
             "html_content": (
-                f'<note><element type="Text"><hw_font size ="1.0">{title}</hw_font></element>'
-                f'<element type="Text">{content_text}</element></note>'
+                f'<note><element type="Text"><hw_font size ="1.0">{_escape_html(title)}</hw_font></element>'
+                f'<element type="Text">{_escape_html(content_text)}</element></note>'
             ),
             "tag_id": tag_id, "modified": now_ms, "unstructure": "[]",
             "first_attach_name": "", "remind_id": "",
             "favorite": 0, "has_attachment": 0, "has_todo": 0,
-            "version": "12", "title": f"{title}\n{content_text}", "data3": "",
+            "version": "12", "title": f"{_escape_html(title)}\n{_escape_html(content_text)}", "data3": "",
         }
 
         inner_data = json.dumps({

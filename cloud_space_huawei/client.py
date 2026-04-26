@@ -9,9 +9,21 @@ from typing import Any, Callable, Dict, Optional
 import requests
 
 from .auth import AuthManager, LoginResult
-from .base import BaseModule, _generate_traceid
+from .base import (
+    DEFAULT_TIMEOUT,
+    TRACE_COOKIE,
+    TRACE_HEARTBEAT,
+    TRACE_LOGOUT,
+    TRACE_PORTAL,
+    TRACE_SPACE,
+    BaseModule,
+    _generate_traceid,
+)
 
 logger = logging.getLogger("cloud-space-huawei")
+
+# 共享状态锁 — 保护 CSRFToken / cookies_dict / user_id 等跨线程共享数据
+_state_lock = threading.RLock()
 
 
 class HuaweiCloudClient:
@@ -240,19 +252,20 @@ class HuaweiCloudClient:
     @property
     def csrf_token(self) -> str:
         """获取当前最新的 CSRFToken（心跳线程会自动刷新）"""
-        return self._csrf_token
+        with _state_lock:
+            return self._csrf_token
 
     def _heartbeat_loop(self) -> None:
         """后台心跳循环"""
         while not self._heartbeat_stop.wait(timeout=self._heartbeat_interval):
             try:
                 self._do_heartbeat()
-            except Exception as e:
+            except (requests.RequestException, OSError) as e:
                 logger.warning("心跳请求异常: %s", e)
 
     def _do_heartbeat(self) -> None:
         """执行一次心跳请求并更新 CSRFToken"""
-        trace_id = _generate_traceid("07100")
+        trace_id = _generate_traceid(TRACE_HEARTBEAT)
         url = f"https://cloud.huawei.com/heartbeatCheck?checkType=1&traceId={trace_id}"
 
         resp = self._session.get(
@@ -269,13 +282,13 @@ class HuaweiCloudClient:
         # 从响应头获取新的 CSRFToken
         new_csrf = resp.headers.get('CSRFToken', '')
         if new_csrf:
-            old_csrf = self._csrf_token
-            self._csrf_token = new_csrf
-            # 更新 session cookie
-            self._session.cookies.set('CSRFToken', new_csrf, domain='cloud.huawei.com')
-            # 更新 cookies_dict
-            self._cookies_dict['CSRFToken'] = new_csrf
-            # 更新所有已创建的子模块
+            with _state_lock:
+                old_csrf = self._csrf_token
+                self._csrf_token = new_csrf
+                self._session.cookies.set('CSRFToken', new_csrf, domain='cloud.huawei.com')
+                self._cookies_dict['CSRFToken'] = new_csrf
+
+            # 更新所有已创建的子模块（在锁外执行避免死锁）
             self._update_modules_csrf(new_csrf)
 
             if old_csrf != new_csrf:
@@ -289,17 +302,20 @@ class HuaweiCloudClient:
 
         # 从 Set-Cookie 中也同步 CSRFToken
         for cookie in self._session.cookies:
-            if cookie.name == 'CSRFToken' and cookie.value and cookie.value != self._csrf_token:
-                self._csrf_token = cookie.value
-                self._cookies_dict['CSRFToken'] = cookie.value
-                self._update_modules_csrf(cookie.value)
+            if cookie.name == 'CSRFToken' and cookie.value:
+                with _state_lock:
+                    if cookie.value != self._csrf_token:
+                        self._csrf_token = cookie.value
+                        self._cookies_dict['CSRFToken'] = cookie.value
+                if cookie.value != new_csrf:
+                    self._update_modules_csrf(cookie.value)
 
         try:
             data = resp.json()
             code = str(data.get("code", "-1"))
             if code != "0":
                 logger.warning("心跳返回 code=%s, info=%s", code, data.get("info", ""))
-        except Exception:
+        except ValueError:
             pass
 
         logger.debug("心跳正常")
@@ -355,7 +371,7 @@ class HuaweiCloudClient:
             logger.debug("CAS logout 状态码: %s", resp.status_code)
 
             # Step 3: setCookieValue — 清除 fromActive
-            trace_id = _generate_traceid("25002")
+            trace_id = _generate_traceid(TRACE_LOGOUT)
             self._session.post(
                 "https://cloud.huawei.com/html/setCookieValue",
                 headers={
@@ -399,14 +415,14 @@ class HuaweiCloudClient:
     def cookies(self) -> Dict[str, str]:
         """当前 cookies 字典（从 session 动态同步）"""
         # 从 session 中获取最新的 cookie 值
-        for name in ("CSRFToken", "shareToken", "JSESSIONID", "userId"):
-            value = self._session.cookies.get(name, domain="cloud.huawei.com")
-            if value:
-                self._cookies_dict[name] = value
-                # 同时更新 _csrf_token（如果是 CSRFToken）
-                if name == "CSRFToken":
-                    self._csrf_token = value
-        return self._cookies_dict
+        with _state_lock:
+            for name in ("CSRFToken", "shareToken", "JSESSIONID", "userId"):
+                value = self._session.cookies.get(name, domain="cloud.huawei.com")
+                if value:
+                    self._cookies_dict[name] = value
+                    if name == "CSRFToken":
+                        self._csrf_token = value
+            return self._cookies_dict.copy()
 
     # ==================== 子模块 (懒加载) ====================
 
@@ -454,12 +470,12 @@ class HuaweiCloudClient:
             simplify: 是否精简返回数据，默认 True。精简时仅保留云空间相关
                      配置，去除大量无关的网址和链接。
         """
-        trace_id = _generate_traceid("00001")
+        trace_id = _generate_traceid(TRACE_PORTAL)
         resp = self._session.post(
             f"https://cloud.huawei.com/html/getCommonParam?traceId={trace_id}",
             headers=self._module_headers(),
             json={"traceId": trace_id},
-            timeout=30, verify=False,
+            timeout=DEFAULT_TIMEOUT, verify=False,
         )
         data = self._parse_portal_response(resp)
         if "error" in data:
@@ -506,12 +522,12 @@ class HuaweiCloudClient:
             simplify: 是否精简返回数据，默认 True。精简后仅保留用户相关的
                      关键字段，去除大量无用配置项和长链接。
         """
-        trace_id = _generate_traceid("00001")
+        trace_id = _generate_traceid(TRACE_PORTAL)
         resp = self._session.post(
             f"https://cloud.huawei.com/html/getHomeData?traceId={trace_id}",
             headers=self._module_headers(),
             json={"traceId": trace_id},
-            timeout=30, verify=False,
+            timeout=DEFAULT_TIMEOUT, verify=False,
         )
         data = self._parse_portal_response(resp)
         if "error" in data:
@@ -560,12 +576,12 @@ class HuaweiCloudClient:
 
     def get_cookies(self) -> dict:
         """查询服务端 Cookie 值"""
-        trace_id = _generate_traceid("25001")
+        trace_id = _generate_traceid(TRACE_COOKIE)
         resp = self._session.post(
             f"https://cloud.huawei.com/html/queryCookieValuesByNames?traceId={trace_id}",
             headers=self._module_headers(),
             json={"traceId": trace_id},
-            timeout=30, verify=False,
+            timeout=DEFAULT_TIMEOUT, verify=False,
         )
         data = self._parse_portal_response(resp)
         if "error" in data:
@@ -578,10 +594,10 @@ class HuaweiCloudClient:
 
     def heartbeat_check(self) -> dict:
         """心跳检测，保持会话活跃"""
-        trace_id = _generate_traceid("07100")
+        trace_id = _generate_traceid(TRACE_HEARTBEAT)
         url = f"https://cloud.huawei.com/heartbeatCheck?checkType=1&traceId={trace_id}"
         resp = self._session.get(
-            url, headers=self._module_headers(), timeout=30, verify=False,
+            url, headers=self._module_headers(), timeout=DEFAULT_TIMEOUT, verify=False,
         )
         data = self._parse_portal_response(resp)
         if "error" in data:
@@ -592,7 +608,7 @@ class HuaweiCloudClient:
 
     def notify_poll(self, tag: str = "0", module: str = "portal", timeout: int = 60) -> dict:
         """通知轮询 (长轮询)"""
-        trace_id = _generate_traceid("07100")
+        trace_id = _generate_traceid(TRACE_HEARTBEAT)
         body = {"tag": tag, "module": module, "traceId": trace_id}
         resp = self._session.post(
             "https://cloud.huawei.com/notify",
@@ -619,12 +635,12 @@ class HuaweiCloudClient:
                      deviceAliasName、deviceType、terminalType、frequentlyUsed、
                      loginTime、logoutTime、deviceId 等关键字段。
         """
-        trace_id = _generate_traceid("07102")
+        trace_id = _generate_traceid(TRACE_SPACE)
         resp = self._session.post(
             f"https://cloud.huawei.com/nsp/getInfos?traceId={trace_id}",
             headers=self._module_headers(),
             json={"traceId": trace_id},
-            timeout=30, verify=False,
+            timeout=DEFAULT_TIMEOUT, verify=False,
         )
         data = self._parse_portal_response(resp)
         if "error" in data:
@@ -661,12 +677,12 @@ class HuaweiCloudClient:
 
     def refresh_cookies(self) -> dict:
         """刷新 cookies 并更新客户端状态"""
-        trace_id = _generate_traceid("25001")
+        trace_id = _generate_traceid(TRACE_COOKIE)
         resp = self._session.post(
             f"https://cloud.huawei.com/html/queryCookieValuesByNames?traceId={trace_id}",
             headers=self._module_headers(),
             json={"traceId": trace_id},
-            timeout=30, verify=False,
+            timeout=DEFAULT_TIMEOUT, verify=False,
         )
         data = self._parse_portal_response(resp)
         if "error" in data:
@@ -689,10 +705,11 @@ class HuaweiCloudClient:
         包括 CSRFToken、userId、isLogin、loginSecLevel、functionSupport、
         webOfficeEditToken、shareToken 等。
         """
-        self._cookies_dict = result.cookies
-        self._csrf_token = result.cookies.get('CSRFToken', '')
-        self._user_id = result.cookies.get('userId', '')
-        self._device_id = result.cookies.get('device_id', '')
+        with _state_lock:
+            self._cookies_dict = result.cookies
+            self._csrf_token = result.cookies.get('CSRFToken', '')
+            self._user_id = result.cookies.get('userId', '')
+            self._device_id = result.cookies.get('device_id', '')
         self._invalidate_modules()
 
     def _apply_cookies(self, cookies: Dict[str, str]) -> None:
@@ -713,10 +730,11 @@ class HuaweiCloudClient:
                 self._session.cookies.set(name, value, domain='cloud.huawei.com')
             else:
                 self._session.cookies.set(name, value, domain='.huawei.com')
-        self._cookies_dict = cookies
-        self._csrf_token = cookies.get('CSRFToken', '')
-        self._user_id = cookies.get('userId', '')
-        self._device_id = cookies.get('device_id', '')
+        with _state_lock:
+            self._cookies_dict = cookies
+            self._csrf_token = cookies.get('CSRFToken', '')
+            self._user_id = cookies.get('userId', '')
+            self._device_id = cookies.get('device_id', '')
         self._invalidate_modules()
 
     def _invalidate_modules(self) -> None:
@@ -752,17 +770,21 @@ class HuaweiCloudClient:
             # 从响应头获取新的 CSRFToken
             new_csrf = resp.headers.get('CSRFToken', '')
             if new_csrf:
-                self._csrf_token = new_csrf
-                self._session.cookies.set('CSRFToken', new_csrf, domain='cloud.huawei.com')
-                self._cookies_dict['CSRFToken'] = new_csrf
+                with _state_lock:
+                    self._csrf_token = new_csrf
+                    self._session.cookies.set('CSRFToken', new_csrf, domain='cloud.huawei.com')
+                    self._cookies_dict['CSRFToken'] = new_csrf
                 self._update_modules_csrf(new_csrf)
 
             # 从 Set-Cookie 中也同步 CSRFToken
             for cookie in self._session.cookies:
-                if cookie.name == 'CSRFToken' and cookie.value and cookie.value != self._csrf_token:
-                    self._csrf_token = cookie.value
-                    self._cookies_dict['CSRFToken'] = cookie.value
-                    self._update_modules_csrf(cookie.value)
+                if cookie.name == 'CSRFToken' and cookie.value:
+                    with _state_lock:
+                        if cookie.value != self._csrf_token:
+                            self._csrf_token = cookie.value
+                            self._cookies_dict['CSRFToken'] = cookie.value
+                    if cookie.value != new_csrf:
+                        self._update_modules_csrf(cookie.value)
 
             data = resp.json()
             code = str(data.get("code", "-1"))
@@ -773,7 +795,7 @@ class HuaweiCloudClient:
                 logger.warning("心跳检测: code=%s, info=%s", code, data.get("info", ""))
                 return False
 
-        except Exception as e:
+        except (requests.RequestException, OSError) as e:
             logger.warning("心跳检测失败: %s", e)
             return False
 
@@ -787,7 +809,7 @@ class HuaweiCloudClient:
                 dev_id = result.get("data", {}).get("deviceIdForHeader", "")
                 if dev_id:
                     self._device_id = str(dev_id)
-        except Exception as e:
+        except (requests.RequestException, OSError) as e:
             logger.debug("获取 device_id 失败: %s", e)
 
     @staticmethod
@@ -817,7 +839,7 @@ class HuaweiCloudClient:
             return {"error": f"HTTP {resp.status_code}", "_code": str(resp.status_code)}
         except requests.RequestException as e:
             return {"error": "请求异常", "detail": str(e), "_code": "-1"}
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             return {"error": "响应解析失败", "detail": str(e), "_code": "-2"}
 
     def _module_headers(self) -> Dict[str, str]:
