@@ -3,7 +3,7 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
-name = "Cloud Space API"
+name = "cloud-space-api"
 version = "0.3.0"
 description = "Cloud Space Python SDK — Login, Notepad, Contacts, Gallery, Drive, Find Device"
 readme = "README.md"
