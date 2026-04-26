@@ -42,10 +42,12 @@ class BaseModule:
     # ---------- 子类可覆盖 ----------
 
     def _headers(self) -> Dict[str, str]:
+        # 实时从 session.cookies 获取最新的 CSRFToken，避免使用缓存的过期 token
+        csrf = self._session.cookies.get("CSRFToken", domain="cloud.huawei.com") or self._csrf_token
         return {
             "accept": "application/json, text/plain, */*",
             "content-type": "application/json;charset=UTF-8",
-            "csrftoken": self._csrf_token,
+            "csrftoken": csrf,
             "userid": self._user_id,
             "x-hw-account-brand-id": "0",
             "x-hw-app-brand-id": "1",

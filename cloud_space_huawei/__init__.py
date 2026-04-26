@@ -49,6 +49,7 @@ from .gallery import (
     THUMB_CROP,
     THUMB_LCD,
 )
+from .drive import DriveModule
 
 __all__ = [
     "HuaweiCloudClient",
@@ -73,5 +74,6 @@ __all__ = [
     "THUMB_ORIGINAL",
     "THUMB_CROP",
     "THUMB_LCD",
+    "DriveModule",
 ]
 __version__ = "0.2.0"

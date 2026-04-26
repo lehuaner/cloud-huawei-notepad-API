@@ -37,5 +37,11 @@ dev = [
     "pytest-mock",
 ]
 
+[tool.pytest.ini_options]
+testpaths = ["test"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v -s --tb=short"
+
 [tool.setuptools.packages.find]
 include = ["cloud_space_huawei*"]

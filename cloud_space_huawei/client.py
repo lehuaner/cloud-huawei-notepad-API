@@ -397,7 +397,15 @@ class HuaweiCloudClient:
 
     @property
     def cookies(self) -> Dict[str, str]:
-        """当前 cookies 字典"""
+        """当前 cookies 字典（从 session 动态同步）"""
+        # 从 session 中获取最新的 cookie 值
+        for name in ("CSRFToken", "shareToken", "JSESSIONID", "userId"):
+            value = self._session.cookies.get(name, domain="cloud.huawei.com")
+            if value:
+                self._cookies_dict[name] = value
+                # 同时更新 _csrf_token（如果是 CSRFToken）
+                if name == "CSRFToken":
+                    self._csrf_token = value
         return self._cookies_dict
 
     # ==================== 子模块 (懒加载) ====================

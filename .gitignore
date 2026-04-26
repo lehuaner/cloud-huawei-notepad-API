@@ -9,7 +9,7 @@ dist/
 build/
 *.egg-info/
 *.egg
-
+*test.py
 # Sensitive data
 cookies.json
 trust_data.json
@@ -55,3 +55,4 @@ notepad_tags_result.json
 login_no_verify.py
 首页数据
 空间信息
+_debug.py
