@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
-name = "cloud-space-huawei"
-version = "0.2.0"
-description = "华为云空间 Python SDK — 登录、备忘录、联系人、图库、云盘、查找设备"
+name = "Cloud Space API"
+version = "0.3.0"
+description = "Cloud Space Python SDK — Login, Notepad, Contacts, Gallery, Drive, Find Device"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.8"
@@ -28,6 +28,10 @@ dependencies = [
     "requests>=2.28",
     "urllib3>=1.26",
 ]
+
+[project.urls]
+Homepage = "https://github.com/lehuaner/Cloud-Space-API"
+Repository = "https://github.com/lehuaner/Cloud-Space-API"
 
 [project.optional-dependencies]
 image = [

@@ -459,8 +459,20 @@ result = client.contacts.add_contacts_to_groups(
 
 > 也可以在 `create_contact` / `update_contact` 时通过 `groups` 参数直接加入群组，更简便。
 
----
+### 4.4 查询联系人和群组数量 `query_count()`
 
+返回联系人和群组的数量统计。
+
+```python
+result = client.contacts.query_count()
+
+if result.get("ok"):
+    data = result.get("data", {})
+    print(f"联系人数: {data.get('contactCount', 0)}")
+    print(f"群组数: {data.get('groupCount', 0)}")
+```
+
+---
 
 ## 五、导入与导出
 
@@ -720,6 +732,7 @@ result = client.contacts.delete_recyle_contacts(["FsuGCA_..."])
 | `get_all_groups()` | `POST /contact/getAllGroups` | 获取所有群组 |
 | `create_group()` | `POST /contact/createGroup` | 创建群组 |
 | `add_contacts_to_groups()` | `POST /contact/addContacts2Groups` | 添加联系人到群组 |
+| `query_count()` | `POST /contact/queryCount` | 查询联系人和群组数量 |
 | `export_contacts()` | `GET /contact/exportContacts` | 导出联系人 |
 | `import_contacts()` | `POST /contact/importContacts` | 导入联系人 |
 | `preview_img()` | `POST /contact/previewImg` | 上传头像图片 |

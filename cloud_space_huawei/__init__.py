@@ -1,5 +1,5 @@
 """
-cloud-space-huawei — 华为云空间 Python SDK
+Cloud Space API — Cloud Space Python SDK
 
 提供登录、备忘录、联系人、图库、云盘、查找设备等接口。
 
@@ -50,6 +50,8 @@ from .gallery import (
     THUMB_LCD,
 )
 from .drive import DriveModule
+from .payment import PaymentModule
+from .revisions import RevisionsModule
 
 __all__ = [
     "HuaweiCloudClient",
@@ -75,5 +77,7 @@ __all__ = [
     "THUMB_CROP",
     "THUMB_LCD",
     "DriveModule",
+    "PaymentModule",
+    "RevisionsModule",
 ]
-__version__ = "0.2.0"
+__version__ = "0.3.0"

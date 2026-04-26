@@ -9,52 +9,57 @@ dist/
 build/
 *.egg-info/
 *.egg
-*test.py
+
 # Sensitive data
 cookies.json
 trust_data.json
 session.json
 captcha.png
-*.json
-*.jpg
+huawei_verify_code.png
+test_cookies.json
 
-# Test / debug
-test_output/
-test*.*
-简单cookie-复杂cookie/
-所有notepad操作/
-login/
-登出过程/
-信任设备登录/
-登录到被迫登出/
-登录到被迫登出 - 副本/
-一些操作/
-登录但不验证/
-登录但不认证/
-认证-发送验证码-返回验证码-信任浏览器/
-_/
-抓包数据/
-downloads/
+# Test / debug files (project root only)
+/_debug.py
+/_run_test.py
+/test_bell_nova14pro.py
+/test_bell_simple.py
+/test_lock_simple.py
+/test_out.txt
+/test_output/
+/downloads/
+
+# Captured data (reverse engineering artifacts)
+/抓包数据/
+/login/
+
+# Pytest
 test/
 .pytest_cache/
+
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 
-
 # OS
 .DS_Store
 Thumbs.db
-todo.md
 
-# Project data
-note_structure_analysis.json
-hertbeatcheck
-queryCookieValuesByNames
-notepad_tags_result.json
-login_no_verify.py
-首页数据
-空间信息
-_debug.py
+# Project internal files
+/cloud_space_huawei/todo.md
+/note_structure_analysis.json
+/hertbeatcheck
+/queryCookieValuesByNames
+/notepad_tags_result.json
+/login_no_verify.py
+/首页数据
+/空间信息
+
+# Fingerprint cache
+.fingerprint.json
+
+# Environment
+.env
+.venv/
+venv/

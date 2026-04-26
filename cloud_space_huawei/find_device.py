@@ -615,7 +615,6 @@ class FindDeviceModule(BaseModule):
                     - locate_attempts: 定位尝试次数
                     - total_time: 总耗时（秒）
         """
-        import time
         start_time = time.time()
         result_data: Dict[str, Any] = {
             "device_id": device_id,

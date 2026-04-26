@@ -62,6 +62,8 @@ class HuaweiCloudClient:
         gallery: 图库模块
         drive: 云盘模块
         find_device: 查找设备模块
+        payment: 会员/支付模块
+        revisions: 版本管理模块
     """
 
     def __init__(self) -> None:
@@ -75,6 +77,8 @@ class HuaweiCloudClient:
         self._gallery: Optional[Any] = None
         self._drive: Optional[Any] = None
         self._find_device: Optional[Any] = None
+        self._payment: Optional[Any] = None
+        self._revisions: Optional[Any] = None
 
         # 从 cookies 提取的关键字段
         self._cookies_dict: Dict[str, str] = {}
@@ -323,7 +327,8 @@ class HuaweiCloudClient:
     def _update_modules_csrf(self, new_csrf: str) -> None:
         """更新所有已创建子模块的 CSRFToken"""
         for mod in (self._notepad, self._contacts, self._gallery,
-                    self._drive, self._find_device):
+                    self._drive, self._find_device,
+                    self._payment, self._revisions):
             if mod is not None and hasattr(mod, '_csrf_token'):
                 mod._csrf_token = new_csrf
 
@@ -460,6 +465,20 @@ class HuaweiCloudClient:
         if self._find_device is None:
             self._find_device = self._create_module("find_device")
         return self._find_device
+
+    @property
+    def payment(self):
+        """会员/支付模块"""
+        if self._payment is None:
+            self._payment = self._create_module("payment")
+        return self._payment
+
+    @property
+    def revisions(self):
+        """版本管理模块"""
+        if self._revisions is None:
+            self._revisions = self._create_module("revisions")
+        return self._revisions
 
     # ==================== 门户级 API ====================
 
@@ -696,6 +715,333 @@ class HuaweiCloudClient:
         return {"ok": code == "0", "code": code,
                 "msg": f"刷新{len(cookies)}项" if code == "0" else f"失败({code})"}
 
+    # ==================== 补充 API ====================
+
+    def _supp_headers(self, trace_id: str = "") -> Dict[str, str]:
+        """补充 API 专用请求头
+
+        基于 _module_headers()，额外添加 x-hw-trace-id。
+        """
+        h = self._module_headers()
+        if trace_id:
+            h["x-hw-trace-id"] = trace_id
+        return h
+
+    @staticmethod
+    def _parse_supp_response(resp: requests.Response) -> dict:
+        """解析补充 API 响应 — 兼容多种响应格式
+
+        补充 API 的响应格式不统一:
+        - 标准: ``{"code": "0", ...}``
+        - 无 code: ``{"deCardOps": [...], ...}``
+        - HTML: ``<!DOCTYPE html>...``
+        """
+        try:
+            if resp.status_code == 200:
+                # 先尝试 JSON 解析
+                try:
+                    data = resp.json()
+                except (ValueError, TypeError):
+                    # 非 JSON 响应 (如 HTML 页面)
+                    return {"error": "非JSON响应", "_code": "-3",
+                            "raw_text": resp.text[:200]}
+
+                # 检查 402
+                code = str(data.get("code", ""))
+                if code == "402":
+                    return {"error": "设备未认证(402)", "_code": "402"}
+                return data
+            if resp.status_code == 400:
+                return {"error": "HTTP 400", "_code": "400"}
+            if resp.status_code == 401:
+                return {"error": "认证失败(401)", "_code": "401"}
+            if resp.status_code == 402:
+                return {"error": "设备未认证(402)", "_code": "402"}
+            return {"error": f"HTTP {resp.status_code}", "_code": str(resp.status_code)}
+        except requests.RequestException as e:
+            return {"error": "请求异常", "detail": str(e), "_code": "-1"}
+
+    @staticmethod
+    def _get_supp_code(data: dict) -> str:
+        """从补充 API 响应中提取 code — 兼容多种格式"""
+        if "code" in data:
+            return str(data["code"])
+        # 无 code 字段的响应视为成功 (200 状态 + 有数据)
+        if "error" not in data:
+            return "0"
+        return ""
+
+    def get_user_space(self) -> dict:
+        """获取用户空间详情
+
+        返回详细的云空间使用情况，包括已用空间、总空间等。
+        若端点不可用 (返回 400)，回退到 get_space_info()。
+        """
+        trace_id = _generate_traceid(TRACE_SPACE)
+        try:
+            resp = self._session.post(
+                f"https://cloud.huawei.com/nsp/getUserSpace?traceId={trace_id}",
+                headers=self._supp_headers(trace_id),
+                json={"traceId": trace_id},
+                timeout=DEFAULT_TIMEOUT, verify=False,
+            )
+            data = self._parse_supp_response(resp)
+            if "error" in data and data.get("_code") == "400":
+                # 端点可能不支持，回退到 get_space_info
+                logger.debug("getUserSpace 返回 400，回退到 get_space_info")
+                fallback = self.get_space_info()
+                fallback["msg"] = "用户空间详情(回退)"
+                return fallback
+            if "error" in data:
+                return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
+            code = self._get_supp_code(data)
+            return {"ok": code == "0", "code": code,
+                    "msg": "用户空间详情" if code == "0" else f"失败({code})",
+                    "data": data}
+        except requests.RequestException as e:
+            return {"ok": False, "code": "-1", "msg": f"请求异常: {e}"}
+
+    def get_family_share_info(self) -> dict:
+        """获取家庭共享信息
+
+        返回家庭空间共享成员和共享空间信息。
+        """
+        trace_id = _generate_traceid(TRACE_SPACE)
+        try:
+            resp = self._session.post(
+                f"https://cloud.huawei.com/nsp/getFamilyShareInfo?traceId={trace_id}",
+                headers=self._supp_headers(trace_id),
+                json={"traceId": trace_id},
+                timeout=DEFAULT_TIMEOUT, verify=False,
+            )
+            data = self._parse_supp_response(resp)
+            if "error" in data:
+                return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
+            code = self._get_supp_code(data)
+            return {"ok": code == "0", "code": code,
+                    "msg": "家庭共享信息" if code == "0" else f"失败({code})",
+                    "data": data}
+        except requests.RequestException as e:
+            return {"ok": False, "code": "-1", "msg": f"请求异常: {e}"}
+
+    def get_device_and_wallet(self) -> dict:
+        """获取设备和钱包信息
+
+        返回用户的设备信息和钱包（余额等）信息。
+        注意: 该接口响应无 code 字段，200 即视为成功。
+        """
+        trace_id = _generate_traceid(TRACE_PORTAL)
+        try:
+            resp = self._session.post(
+                f"https://cloud.huawei.com/setting/getDeviceAndWallet?traceId={trace_id}",
+                headers=self._supp_headers(trace_id),
+                json={"traceId": trace_id},
+                timeout=DEFAULT_TIMEOUT, verify=False,
+            )
+            data = self._parse_supp_response(resp)
+            if "error" in data:
+                return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
+            # 该接口响应无 code 字段，200 即成功
+            return {"ok": True, "code": "0",
+                    "msg": "设备和钱包信息", "data": data}
+        except requests.RequestException as e:
+            return {"ok": False, "code": "-1", "msg": f"请求异常: {e}"}
+
+    def get_personal_info(self) -> dict:
+        """获取个人信息
+
+        返回用户的个人信息。此接口返回 HTML 页面而非 JSON，
+        将从页面中解析关键数据。
+        """
+        trace_id = _generate_traceid(TRACE_PORTAL)
+        try:
+            resp = self._session.get(
+                f"https://cloud.huawei.com/personalInfo?traceId={trace_id}",
+                headers=self._supp_headers(trace_id),
+                timeout=DEFAULT_TIMEOUT, verify=False,
+            )
+            if resp.status_code != 200:
+                return {"ok": False, "code": str(resp.status_code),
+                        "msg": f"HTTP {resp.status_code}"}
+            # personalInfo 返回 HTML，尝试提取嵌入的 JSON 数据
+            text = resp.text
+            info = {}
+            # 尝试从 HTML 中提取 accountName
+            import re
+            m = re.search(r'"accountName"\s*:\s*"([^"]*)"', text)
+            if m:
+                info["accountName"] = m.group(1)
+            m = re.search(r'"userEmail"\s*:\s*"([^"]*)"', text)
+            if m:
+                info["userEmail"] = m.group(1)
+            m = re.search(r'"countryCode"\s*:\s*"([^"]*)"', text)
+            if m:
+                info["countryCode"] = m.group(1)
+            # 如果从 get_home_data 能获取更完整的信息，优先使用
+            home = self.get_home_data(simplify=True)
+            if home.get("ok"):
+                home_data = home.get("data", {})
+                info.setdefault("accountName", home_data.get("accountName", ""))
+                info.setdefault("userEmail", home_data.get("userEmail", ""))
+                info.setdefault("countryCode", home_data.get("countryCode", ""))
+                info["userid"] = home_data.get("userid", "")
+                info["gradeCode"] = home_data.get("gradeCode", "")
+            if info:
+                return {"ok": True, "code": "0", "msg": "个人信息", "data": info}
+            return {"ok": False, "code": "-3", "msg": "无法解析个人信息"}
+        except requests.RequestException as e:
+            return {"ok": False, "code": "-1", "msg": f"请求异常: {e}"}
+
+    def get_language_map(self) -> dict:
+        """获取语言映射
+
+        返回多语言配置映射。
+        """
+        trace_id = _generate_traceid(TRACE_PORTAL)
+        try:
+            resp = self._session.post(
+                f"https://cloud.huawei.com/language/getLanguageMap?traceId={trace_id}",
+                headers=self._supp_headers(trace_id),
+                json={"traceId": trace_id},
+                timeout=DEFAULT_TIMEOUT, verify=False,
+            )
+            data = self._parse_supp_response(resp)
+            if "error" in data:
+                return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
+            code = self._get_supp_code(data)
+            return {"ok": code == "0", "code": code,
+                    "msg": "语言映射" if code == "0" else f"失败({code})",
+                    "data": data}
+        except requests.RequestException as e:
+            return {"ok": False, "code": "-1", "msg": f"请求异常: {e}"}
+
+    def get_client_log_report(self) -> dict:
+        """获取客户端日志报告配置
+
+        返回客户端日志上报的相关配置信息。
+        """
+        trace_id = _generate_traceid(TRACE_PORTAL)
+        try:
+            resp = self._session.post(
+                f"https://cloud.huawei.com/basic/getClientLogReport?traceId={trace_id}",
+                headers=self._supp_headers(trace_id),
+                json={"traceId": trace_id},
+                timeout=DEFAULT_TIMEOUT, verify=False,
+            )
+            data = self._parse_supp_response(resp)
+            if "error" in data:
+                return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
+            code = self._get_supp_code(data)
+            return {"ok": code == "0", "code": code,
+                    "msg": "客户端日志配置" if code == "0" else f"失败({code})",
+                    "data": data}
+        except requests.RequestException as e:
+            return {"ok": False, "code": "-1", "msg": f"请求异常: {e}"}
+
+    def update_client_log_report(self, log_data: dict = None) -> dict:
+        """更新客户端日志报告
+
+        上报客户端日志信息。
+
+        Args:
+            log_data: 日志数据
+        """
+        trace_id = _generate_traceid(TRACE_PORTAL)
+        body = {"traceId": trace_id}
+        if log_data:
+            body.update(log_data)
+        try:
+            resp = self._session.post(
+                f"https://cloud.huawei.com/basic/updateClientLogReport?traceId={trace_id}",
+                headers=self._supp_headers(trace_id),
+                json=body,
+                timeout=DEFAULT_TIMEOUT, verify=False,
+            )
+            data = self._parse_supp_response(resp)
+            if "error" in data:
+                return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
+            code = self._get_supp_code(data)
+            return {"ok": code == "0", "code": code,
+                    "msg": "日志上报成功" if code == "0" else f"失败({code})",
+                    "data": data}
+        except requests.RequestException as e:
+            return {"ok": False, "code": "-1", "msg": f"请求异常: {e}"}
+
+    def data_extract_query_task(self) -> dict:
+        """查询数据提取任务
+
+        返回数据提取任务的状态和进度。
+        """
+        trace_id = _generate_traceid(TRACE_PORTAL)
+        try:
+            resp = self._session.get(
+                f"https://cloud.huawei.com/dataExtract/queryTask?traceId={trace_id}",
+                headers=self._supp_headers(trace_id),
+                timeout=DEFAULT_TIMEOUT, verify=False,
+            )
+            data = self._parse_supp_response(resp)
+            if "error" in data:
+                return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
+            code = self._get_supp_code(data)
+            return {"ok": code == "0", "code": code,
+                    "msg": "数据提取任务" if code == "0" else f"失败({code})",
+                    "data": data}
+        except requests.RequestException as e:
+            return {"ok": False, "code": "-1", "msg": f"请求异常: {e}"}
+
+    def get_app_info_list_by_consent(self) -> dict:
+        """获取应用数据管理信息
+
+        返回用户授权的应用数据管理列表。
+        注意: 该接口可能返回 code=-3 (参数无效)，表示服务端
+        需要特定参数但当前账户无数据。
+        """
+        trace_id = _generate_traceid(TRACE_PORTAL)
+        try:
+            resp = self._session.post(
+                f"https://cloud.huawei.com/appdatamanagement/getAppInfoListByConsent?traceId={trace_id}",
+                headers=self._supp_headers(trace_id),
+                json={"traceId": trace_id},
+                timeout=DEFAULT_TIMEOUT, verify=False,
+            )
+            data = self._parse_supp_response(resp)
+            if "error" in data:
+                return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
+            code = self._get_supp_code(data)
+            # code=-3 表示参数无效 (服务端可能需要特定参数)
+            return {"ok": code == "0", "code": code,
+                    "msg": "应用数据管理" if code == "0" else
+                           (f"无数据({code})" if code == "-3" else f"失败({code})"),
+                    "data": data}
+        except requests.RequestException as e:
+            return {"ok": False, "code": "-1", "msg": f"请求异常: {e}"}
+
+    def get_space_banner_config(self) -> dict:
+        """获取云空间横幅配置
+
+        返回云空间首页横幅的配置信息。
+        注意: 该接口可能返回 code=-1 (获取失败)，表示当前
+        无可用横幅配置。
+        """
+        trace_id = _generate_traceid(TRACE_PORTAL)
+        try:
+            resp = self._session.post(
+                f"https://cloud.huawei.com/om/getHiCloudSpaceBannerConfig?traceId={trace_id}",
+                headers=self._supp_headers(trace_id),
+                json={"traceId": trace_id},
+                timeout=DEFAULT_TIMEOUT, verify=False,
+            )
+            data = self._parse_supp_response(resp)
+            if "error" in data:
+                return {"ok": False, "code": data.get("_code", "-1"), "msg": data["error"]}
+            code = self._get_supp_code(data)
+            return {"ok": code == "0", "code": code,
+                    "msg": "横幅配置" if code == "0" else
+                           (f"无配置({code})" if code == "-1" else f"失败({code})"),
+                    "data": data}
+        except requests.RequestException as e:
+            return {"ok": False, "code": "-1", "msg": f"请求异常: {e}"}
+
     # ==================== 内部方法 ====================
 
     def _apply_login_result(self, result: LoginResult) -> None:
@@ -744,6 +1090,8 @@ class HuaweiCloudClient:
         self._gallery = None
         self._drive = None
         self._find_device = None
+        self._payment = None
+        self._revisions = None
 
     def _check_login_state(self) -> bool:
         """通过 heartbeatCheck(checkType=1) 检查会话是否有效
@@ -817,7 +1165,14 @@ class HuaweiCloudClient:
         """从门户级响应中提取 code"""
         if "code" in data:
             return str(data["code"])
-        return str(data.get("Result", {}).get("code", ""))
+        if "Result" in data and isinstance(data["Result"], dict):
+            return str(data["Result"].get("code", ""))
+        # 部分接口使用 result.resultCode 格式
+        if "result" in data and isinstance(data["result"], dict):
+            rc = data["result"].get("resultCode", "")
+            if rc:
+                return str(rc)
+        return ""
 
     @staticmethod
     def _parse_portal_response(resp: requests.Response) -> dict:
@@ -843,10 +1198,12 @@ class HuaweiCloudClient:
             return {"error": "响应解析失败", "detail": str(e), "_code": "-2"}
 
     def _module_headers(self) -> Dict[str, str]:
+        # 实时从 session.cookies 获取最新 CSRFToken，避免使用缓存过期 token
+        csrf = self._session.cookies.get("CSRFToken", domain="cloud.huawei.com") or self._csrf_token
         return {
             "accept": "application/json, text/plain, */*",
             "content-type": "application/json;charset=UTF-8",
-            "csrftoken": self._csrf_token,
+            "csrftoken": csrf,
             "userid": self._user_id,
             "x-hw-account-brand-id": "0",
             "x-hw-app-brand-id": "1",
@@ -856,6 +1213,7 @@ class HuaweiCloudClient:
             "x-hw-device-id": self._device_id,
             "x-hw-device-manufacturer": "HUAWEI",
             "x-hw-device-type": "7",
+            "x-hw-framework-type": "0",
             "x-hw-os-brand": "Web",
             "referer": "https://cloud.huawei.com/home",
             "origin": "https://cloud.huawei.com",
@@ -870,6 +1228,8 @@ class HuaweiCloudClient:
             "gallery": ".gallery",
             "drive": ".drive",
             "find_device": ".find_device",
+            "payment": ".payment",
+            "revisions": ".revisions",
         }
         import importlib
         mod = importlib.import_module(module_map[name], package="cloud_space_huawei")

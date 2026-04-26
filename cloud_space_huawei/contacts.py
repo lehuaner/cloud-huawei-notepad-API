@@ -23,7 +23,7 @@ from .base import BaseModule, Result, _generate_traceid
 logger = logging.getLogger("cloud-space-huawei.contacts")
 
 
-def _check_image_size(source: str, size: int = 162) -> bool | None:
+def _check_image_size(source: str, size: int = 162) -> Optional[bool]:
     """检测图片是否为指定尺寸的正方形
 
     Args:
@@ -900,6 +900,19 @@ class ContactsModule(BaseModule):
                 return {"ok": False, "error": f"HTTP {resp.status_code}", "_code": str(resp.status_code)}
             except Exception as e:
                 return {"ok": False, "error": "请求异常", "detail": str(e), "_code": "-1"}
+
+    def query_count(self) -> Result:
+        """查询联系人和群组数量
+
+        Returns:
+            包含 contactCount 和 groupCount
+        """
+        url = f"{self.BASE_URL}/contact/queryCount"
+        body: Dict[str, Any] = {}
+        data = self._post(url, body, trace_prefix="03116")
+        if self._is_success(data):
+            data["ok"] = True
+        return data
 
     # ---------- 群组操作 ----------
 

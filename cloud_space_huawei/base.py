@@ -102,7 +102,14 @@ class BaseModule:
     def _get_code(data: Dict[str, Any]) -> str:
         if "code" in data:
             return str(data["code"])
-        return str(data.get("Result", {}).get("code", ""))
+        if "Result" in data and isinstance(data["Result"], dict):
+            return str(data["Result"].get("code", ""))
+        # 部分 API (如 revisions) 使用 result.resultCode 格式
+        if "result" in data and isinstance(data["result"], dict):
+            rc = data["result"].get("resultCode", "")
+            if rc:
+                return str(rc)
+        return ""
 
     @staticmethod
     def _check_auth_error(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -121,7 +128,13 @@ class BaseModule:
             self._start_cursor = str(cursor)
 
     def _sync_cookies(self, resp: requests.Response) -> None:
-        """从响应同步关键 cookie"""
+        """从响应同步关键 cookie（含响应头 CSRFToken）"""
+        # 部分 API 通过响应头（而非 Set-Cookie）返回新的 CSRFToken
+        new_csrf = resp.headers.get("CSRFToken", "")
+        if new_csrf:
+            self._session.cookies.set("CSRFToken", new_csrf, domain="cloud.huawei.com")
+            self._csrf_token = new_csrf
+
         jar = self._session.cookies
         for name in ["CSRFToken", "shareToken", "JSESSIONID"]:
             value = jar.get(name, domain="cloud.huawei.com")

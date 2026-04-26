@@ -477,12 +477,12 @@ class DriveModule(BaseModule):
                 "POST", url, headers=headers, data=multipart_body, timeout=MEDIUM_TIMEOUT, verify=False,
             )
             self._sync_cookies(resp)
-            logger.debug(f"上传响应状态码: {resp.status_code}")
+            logger.debug("上传响应状态码: %s", resp.status_code)
             if resp.status_code != 200:
-                logger.warning(f"上传失败，状态码: {resp.status_code}, 响应: {resp.text[:500]}")
+                logger.warning("上传失败，状态码: %s, 响应: %s", resp.status_code, resp.text[:500])
                 return {"ok": False, "code": str(resp.status_code), "msg": f"[步骤2-上传] HTTP {resp.status_code}, 响应: {resp.text[:200]}"}
             data = resp.json()
-            logger.debug(f"上传响应数据: {data}")
+            logger.debug("上传响应数据: %s", data)
             
             # 检查错误响应
             if "error" in data:
